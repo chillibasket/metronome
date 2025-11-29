@@ -6,6 +6,7 @@ import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.media.AudioTrack;
 import android.os.Build;
+import android.util.Log;
 
 import android.media.AudioAttributes;
 
@@ -26,11 +27,20 @@ public class Metronome {
     private boolean updated = false;
     private EventChannel.EventSink eventTickSink;
     private int currentTick = 0;
+    
+    // Synchronization primitives
+    private final int MAX_DRIFT_CORRECTION;
+    private long epochStartTimeMs = 0;
+    private long scheduledStartTimeNs = 0;
+    private long audioStartTimeNs = 0;
+    private volatile long targetCorrectionNs = 0;
+    private long actualCorrectionNs = 0;
 
     @SuppressWarnings("deprecation")
     public Metronome(byte[] mainFileBytes, byte[] accentedFileBytes, int bpm, int timeSignature, float volume,
             int sampleRate) {
         SAMPLE_RATE = sampleRate;
+        MAX_DRIFT_CORRECTION = sampleRate / 20;
         audioBpm = bpm;
         audioVolume = volume;
         audioTimeSignature = timeSignature;
@@ -65,16 +75,36 @@ public class Metronome {
     }
 
     public void play() {
+        play(0, 0);
+    }
+
+    public void play(long startTimeMs, long driftCorrectionUs) {
         if (!isPlaying()) {
+            this.epochStartTimeMs = System.currentTimeMillis();
+            this.audioStartTimeNs = System.nanoTime();
+            this.targetCorrectionNs = driftCorrectionUs * 1000;
+            this.actualCorrectionNs = 0;
+            this.scheduledStartTimeNs = this.audioStartTimeNs;
+
+            if (startTimeMs > 0) {
+                this.scheduledStartTimeNs += (startTimeMs - this.epochStartTimeMs) * 1000000L;
+            }
+        
             updated = true;
             onTick();
             // Send immediate tick event to match iOS behavior
             if (eventTickSink != null) {
                 eventTickSink.success(0);  // Send tick 0 immediately
             }
+
+            audioTrack.flush();
             audioTrack.play();
             startMetronome();
         }
+    }
+    
+    public void applyDriftCorrection(long correctionUs) {
+        this.targetCorrectionNs = correctionUs * 1000;
     }
 
     public void pause() {
@@ -153,11 +183,11 @@ public class Metronome {
         int framesPerBeat = (int) (SAMPLE_RATE * 60 / (float) audioBpm);
         short[] bufferBar;
         if (audioTimeSignature < 2) {
-            bufferBar = new short[framesPerBeat];
+            bufferBar = new short[framesPerBeat + MAX_DRIFT_CORRECTION];
             int soundLength = Math.min(framesPerBeat, mainSound.length);
             System.arraycopy(mainSound, 0, bufferBar, 0, soundLength);
         } else {
-            int bufferSize = framesPerBeat * audioTimeSignature;
+            int bufferSize = (framesPerBeat * audioTimeSignature) + MAX_DRIFT_CORRECTION;
             bufferBar = new short[bufferSize];
             for (int i = 0; i < audioTimeSignature; i++) {
                 short[] sound = (i == 0) ? accentedSound : mainSound;
@@ -165,6 +195,7 @@ public class Metronome {
                 System.arraycopy(sound, 0, bufferBar, i * framesPerBeat, soundLength);
             }
         }
+
         updated = false;
         return bufferBar;
     }
@@ -173,21 +204,24 @@ public class Metronome {
         if (eventTickSink == null)
             return;
         int framesPerBeat = (int) ((SAMPLE_RATE * 60.0) / audioBpm);
-        audioTrack.setPositionNotificationPeriod(framesPerBeat);
         audioTrack.setPlaybackPositionUpdateListener(new AudioTrack.OnPlaybackPositionUpdateListener() {
             @Override
             public void onMarkerReached(AudioTrack track) {
+                currentTick = 0;
+                track.setPositionNotificationPeriod(framesPerBeat);
+                eventTickSink.success(currentTick);
             }
 
             @Override
             public void onPeriodicNotification(AudioTrack track) {
                 if (!updated) {
                     if (audioTimeSignature < 2) {
-                        currentTick = 0;
+                        track.setPositionNotificationPeriod(0);
                     } else {
                         currentTick++;
-                        if (currentTick >= audioTimeSignature)
-                            currentTick = 0;
+                        if (currentTick >= audioTimeSignature - 1) {
+                            track.setPositionNotificationPeriod(0);
+                        }
                     }
                     eventTickSink.success(currentTick);
                 }
@@ -204,8 +238,36 @@ public class Metronome {
                     }
                     if (updated) {
                         audioBuffer = generateBuffer();
+
+                        // Wait for the scheduled start time
+                        long waitTimeNs = scheduledStartTimeNs + targetCorrectionNs - System.nanoTime();
+                        if (waitTimeNs > 0) {
+                            actualCorrectionNs = targetCorrectionNs;
+                            short[] delayBuffer = new short[(int) (waitTimeNs * SAMPLE_RATE / 1000000000L)];
+                            audioTrack.setPositionNotificationPeriod(0);
+                            audioTrack.write(delayBuffer, 0, delayBuffer.length);
+                        } else {
+                            actualCorrectionNs = targetCorrectionNs - waitTimeNs;
+                        }
                     } else {
-                        audioTrack.write(audioBuffer, 0, audioBuffer.length);
+                        int trackLengthFrames = audioBuffer.length - MAX_DRIFT_CORRECTION;
+                        int delayFrames = 0;
+
+                        if (Math.abs(targetCorrectionNs - actualCorrectionNs) > 1000) {
+                            delayFrames = (int) ((targetCorrectionNs - actualCorrectionNs) * (float)SAMPLE_RATE / 1000000000L);
+
+                            if (delayFrames > MAX_DRIFT_CORRECTION) {
+                                delayFrames = MAX_DRIFT_CORRECTION;
+                            } else if (delayFrames < -MAX_DRIFT_CORRECTION) {
+                                delayFrames = -MAX_DRIFT_CORRECTION;
+                            }
+                            
+                            actualCorrectionNs += delayFrames * 1000000000L / SAMPLE_RATE;
+                        }
+
+                        // Play the audio buffer
+                        audioTrack.setNotificationMarkerPosition(audioTrack.getPlaybackHeadPosition() + 1);
+                        audioTrack.write(audioBuffer, 0, trackLengthFrames + delayFrames);
                     }
                 }
             }

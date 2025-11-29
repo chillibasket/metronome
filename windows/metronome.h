@@ -14,8 +14,10 @@
 #include <cmath>
 #include <mutex>
 #include <condition_variable>
+#include <chrono>
 #include <flutter/event_sink.h>
 #include <flutter/encodable_value.h>
+
 class Metronome
 {
 public:
@@ -25,6 +27,8 @@ public:
     ~Metronome();
 
     void Play();
+    void Play(int64_t startTimeMs, int64_t driftCorrectionUs);
+    void ApplyDriftCorrection(int64_t correctionUs);
     void Pause();
     void Stop();
     void SetBPM(int bpm);
@@ -64,6 +68,14 @@ private:
     double audioVolume = 1.0;
     std::atomic<bool> playing{false};
     std::thread metronomeThread;
+    
+    // Synchronization primitives
+    int MAX_DRIFT_CORRECTION;
+    int64_t epochStartTimeMs = 0;
+    int64_t scheduledStartTimeNs = 0;
+    int64_t audioStartTimeNs = 0;
+    int64_t targetCorrectionNs = 0;
+    int64_t actualCorrectionNs = 0;
 };
 
 #endif // METRONOME_H_

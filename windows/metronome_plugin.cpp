@@ -80,7 +80,32 @@ namespace metronome
     }
     else if (method == "play")
     {
-      metronome->Play();
+      int64_t startTimeMs = 0;
+      int64_t driftCorrectionUs = 0;
+      
+      if (method_call.arguments())
+      {
+        auto arguments = std::get<flutter::EncodableMap>(*method_call.arguments());
+        auto startTimeMsIt = arguments.find(flutter::EncodableValue("startTimeMs"));
+        if (startTimeMsIt != arguments.end() && !startTimeMsIt->second.IsNull())
+        {
+          startTimeMs = std::get<int64_t>(startTimeMsIt->second);
+        }
+        auto driftCorrectionUsIt = arguments.find(flutter::EncodableValue("driftCorrectionUs"));
+        if (driftCorrectionUsIt != arguments.end() && !driftCorrectionUsIt->second.IsNull())
+        {
+          driftCorrectionUs = std::get<int64_t>(driftCorrectionUsIt->second);
+        }
+      }
+      
+      metronome->Play(startTimeMs, driftCorrectionUs);
+      result->Success(true);
+    }
+    else if (method == "applyDriftCorrection")
+    {
+      auto arguments = std::get<flutter::EncodableMap>(*method_call.arguments());
+      int64_t correctionUs = std::get<int64_t>(arguments[flutter::EncodableValue("driftCorrectionUs")]);
+      metronome->ApplyDriftCorrection(correctionUs);
       result->Success(true);
     }
     else if (method == "pause")

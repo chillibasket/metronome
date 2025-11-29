@@ -51,7 +51,19 @@ public class MetronomePlugin implements FlutterPlugin, MethodCallHandler {
         metronomeInit(call);
         break;
       case "play":
-        metronome.play();
+        long startTimeMs = 0;
+        long driftCorrectionUs = 0;
+        
+        if (call.argument("startTimeMs") != null) {
+          Number startTimeMsNum = call.argument("startTimeMs");
+          startTimeMs = startTimeMsNum != null ? startTimeMsNum.longValue() : 0L;
+        }
+        if (call.argument("driftCorrectionUs") != null) {
+          Number driftCorrectionUsNum = call.argument("driftCorrectionUs");
+          driftCorrectionUs = driftCorrectionUsNum != null ? driftCorrectionUsNum.longValue() : 0L;
+        }
+        
+        metronome.play(startTimeMs, driftCorrectionUs);
         break;
       case "pause":
         metronome.pause();
@@ -82,6 +94,14 @@ public class MetronomePlugin implements FlutterPlugin, MethodCallHandler {
         break;
       case "setAudioFile":
         setAudioFile(call);
+        break;
+      case "applyDriftCorrection":
+        long correctionUs = 0;
+        if (call.argument("driftCorrectionUs") != null) {
+          Number correctionUsNum = call.argument("driftCorrectionUs");
+          correctionUs = correctionUsNum != null ? correctionUsNum.longValue() : 0L;
+        }
+        metronome.applyDriftCorrection(correctionUs);
         break;
       case "destroy":
         metronome.destroy();

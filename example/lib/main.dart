@@ -17,6 +17,9 @@ class _MyAppState extends State<MyApp> {
   bool isplaying = false;
   int bpm = 120;
   int vol = 50;
+  int epochStartTime = 0;
+  int startTimeOffset = 0;
+  int driftCorrection = 0;
   int timeSignature = 4;
   String metronomeIcon = 'assets/metronome-left.png';
   String metronomeIconRight = 'assets/metronome-right.png';
@@ -48,7 +51,8 @@ class _MyAppState extends State<MyApp> {
     _metronomePlugin.tickStream.listen(
       (int tick) {
         currentTick = tick;
-        print("tick: $tick");
+        print(
+            "tick: $tick, ${DateTime.now().millisecondsSinceEpoch - epochStartTime}");
         if (metronomeIcon == metronomeIconRight) {
           metronomeIcon = metronomeIconLeft;
         } else {
@@ -127,6 +131,38 @@ class _MyAppState extends State<MyApp> {
                   setState(() {});
                 },
               ),
+              Text(
+                'Drift correction:$driftCorrection',
+                style: const TextStyle(fontSize: 20),
+              ),
+              Slider(
+                value: driftCorrection.toDouble(),
+                min: -5000,
+                max: 5000,
+                divisions: 100,
+                onChangeEnd: (val) {
+                  _metronomePlugin.applyDriftCorrection(driftCorrection * 1000);
+                },
+                onChanged: (val) {
+                  driftCorrection = val.toInt();
+                  setState(() {});
+                },
+              ),
+              Text(
+                'Start Time Offset:$startTimeOffset',
+                style: const TextStyle(fontSize: 20),
+              ),
+              Slider(
+                value: startTimeOffset.toDouble(),
+                min: -2000,
+                max: 2000,
+                divisions: 100,
+                onChangeEnd: (val) {},
+                onChanged: (val) {
+                  startTimeOffset = val.toInt();
+                  setState(() {});
+                },
+              ),
               const Text(
                 'Time Signature:',
                 style: TextStyle(fontSize: 20),
@@ -169,7 +205,15 @@ class _MyAppState extends State<MyApp> {
               _metronomePlugin.pause();
               isplaying = false;
             } else {
-              _metronomePlugin.play();
+              epochStartTime = DateTime.now().millisecondsSinceEpoch;
+              if (startTimeOffset >= 0) {
+                epochStartTime += startTimeOffset;
+                _metronomePlugin.play(
+                    startTimeMs: epochStartTime,
+                    driftCorrectionUs: driftCorrection);
+              } else {
+                _metronomePlugin.play();
+              }
               isplaying = true;
             }
             setState(() {});

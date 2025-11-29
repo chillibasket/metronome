@@ -35,7 +35,9 @@ public class MetronomePlugin: NSObject, FlutterPlugin {
                   metronomeInit(attributes: attributes)
                 break;
               case "play":
-                  metronome?.play()
+                  let startTimeMs = (attributes?["startTimeMs"] as? Int64) ?? 0
+                  let driftCorrectionUs = (attributes?["driftCorrectionUs"] as? Int64) ?? 0
+                  metronome?.play(startTimeMs: startTimeMs, driftCorrectionUs: driftCorrectionUs)
                 break;
               case "pause":
                   metronome?.pause()
@@ -66,6 +68,10 @@ public class MetronomePlugin: NSObject, FlutterPlugin {
                 break;
               case "setAudioFile":
                   setAudioFile(attributes: attributes)
+                break;
+              case "applyDriftCorrection":
+                  let correctionUs = (attributes?["driftCorrectionUs"] as? Int64) ?? 0
+                  metronome?.applyDriftCorrection(correctionUs: correctionUs)
                 break;
               case "destroy":
                   metronome?.destroy()

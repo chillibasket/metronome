@@ -16,9 +16,19 @@ class Metronome {
     private var sampleRate: Int = 44100
     private var timer: DispatchSourceTimer?
     private var startTime: AVAudioTime?
+    
+    // Synchronization primitives
+    private let MAX_DRIFT_CORRECTION: Int
+    private var epochStartTimeMs: Int64 = 0
+    private var scheduledStartTimeNs: Int64 = 0
+    private var audioStartTimeNs: Int64 = 0
+    private var targetCorrectionNs: Int64 = 0
+    private var actualCorrectionNs: Int64 = 0
+    
     /// Initialize the metronome with the main and accented audio files.
     init(mainFileBytes: Data, accentedFileBytes: Data, bpm: Int, timeSignature: Int = 0, volume: Float, sampleRate: Int) {
         self.sampleRate = sampleRate
+        self.MAX_DRIFT_CORRECTION = sampleRate / 20
         audioTimeSignature = timeSignature
         audioBpm = bpm
         audioVolume = volume
@@ -68,15 +78,35 @@ class Metronome {
     }
     /// Start the metronome.
     func play() {
-        if !audioEngine.isRunning {
-            do {
-                try audioEngine.start()
-            } catch {
-                print("Audio engine failed to start in play(): \(error)")
-                return
+        play(startTimeMs: 0, driftCorrectionUs: 0)
+    }
+    
+    func play(startTimeMs: Int64, driftCorrectionUs: Int64) {
+        if !isPlaying {
+            self.epochStartTimeMs = Int64(Date().timeIntervalSince1970 * 1000)
+            self.audioStartTimeNs = Int64(DispatchTime.now().uptimeNanoseconds)
+            self.targetCorrectionNs = driftCorrectionUs * 1000
+            self.actualCorrectionNs = 0
+            self.scheduledStartTimeNs = self.audioStartTimeNs
+            
+            if startTimeMs > 0 {
+                self.scheduledStartTimeNs += (startTimeMs - self.epochStartTimeMs) * 1000000
             }
+            
+            if !audioEngine.isRunning {
+                do {
+                    try audioEngine.start()
+                } catch {
+                    print("Audio engine failed to start in play(): \(error)")
+                   return
+                }
+            }
+            audioBuffer = generateBuffer()
         }
-        audioBuffer = generateBuffer()
+    }
+    
+    func applyDriftCorrection(correctionUs: Int64) {
+        self.targetCorrectionNs = correctionUs * 1000
     }
 
     /// Pause the metronome.
@@ -218,20 +248,21 @@ class Metronome {
 
         let bufferBar: AVAudioPCMBuffer
         if self.audioTimeSignature < 2 {
-            bufferBar = AVAudioPCMBuffer(pcmFormat: audioFileMain.processingFormat, frameCapacity: beatLength)!
-            bufferBar.frameLength = beatLength
+            bufferBar = AVAudioPCMBuffer(pcmFormat: audioFileMain.processingFormat, frameCapacity: beatLength + AVAudioFrameCount(MAX_DRIFT_CORRECTION))!
+            bufferBar.frameLength = beatLength + AVAudioFrameCount(MAX_DRIFT_CORRECTION)
 
             let channelCount = Int(audioFileMain.processingFormat.channelCount)
             let mainClickArray = Array(UnsafeBufferPointer(start: bufferMainClick.floatChannelData![0], count: channelCount * Int(beatLength)))
 
-            bufferBar.floatChannelData!.pointee.update(from: mainClickArray, count: channelCount * Int(bufferBar.frameLength))
+            bufferBar.floatChannelData!.pointee.update(from: mainClickArray, count: channelCount * Int(beatLength))
         } else {
             let bufferAccentedClick = AVAudioPCMBuffer(pcmFormat: audioFileAccented.processingFormat, frameCapacity: beatLength)!
             try! audioFileAccented.read(into: bufferAccentedClick)
             bufferAccentedClick.frameLength = beatLength
 
-            bufferBar = AVAudioPCMBuffer(pcmFormat: audioFileMain.processingFormat, frameCapacity: beatLength * AVAudioFrameCount(self.audioTimeSignature))!
-            bufferBar.frameLength = beatLength * AVAudioFrameCount(self.audioTimeSignature)
+            let totalCapacity = beatLength * AVAudioFrameCount(self.audioTimeSignature) + AVAudioFrameCount(MAX_DRIFT_CORRECTION)
+            bufferBar = AVAudioPCMBuffer(pcmFormat: audioFileMain.processingFormat, frameCapacity: totalCapacity)!
+            bufferBar.frameLength = totalCapacity
 
             let channelCount = Int(audioFileMain.processingFormat.channelCount)
             let mainClickArray = Array(UnsafeBufferPointer(start: bufferMainClick.floatChannelData![0], count: channelCount * Int(beatLength)))
@@ -246,8 +277,24 @@ class Metronome {
                 }
             }
 
-            bufferBar.floatChannelData!.pointee.update(from: barArray, count: channelCount * Int(bufferBar.frameLength))
+            bufferBar.floatChannelData!.pointee.update(from: barArray, count: channelCount * Int(beatLength) * self.audioTimeSignature)
         }
+        
+        // Handle scheduled start with silence buffer
+        let waitTimeNs = scheduledStartTimeNs + targetCorrectionNs - Int64(DispatchTime.now().uptimeNanoseconds)
+        if waitTimeNs > 0 {
+            actualCorrectionNs = targetCorrectionNs
+            let delaySamples = AVAudioFrameCount(waitTimeNs * Int64(sampleRate) / 1000000000)
+            if delaySamples > 0 {
+                let delayBuffer = AVAudioPCMBuffer(pcmFormat: audioFileMain.processingFormat, frameCapacity: delaySamples)!
+                delayBuffer.frameLength = delaySamples
+                // Schedule silence buffer first
+                self.audioPlayerNode.scheduleBuffer(delayBuffer, completionHandler: nil)
+            }
+        } else {
+            actualCorrectionNs = targetCorrectionNs - waitTimeNs
+        }
+        
         //
         self.startTime = self.audioPlayerNode.lastRenderTime
         self.audioPlayerNode.scheduleBuffer(bufferBar, at: nil, options: .loops,completionHandler: nil)

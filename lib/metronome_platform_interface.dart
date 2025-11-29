@@ -40,7 +40,10 @@ abstract class MetronomePlatform extends PlatformInterface {
     throw UnimplementedError('init() has not been implemented.');
   }
 
-  Future<void> play() {
+  Future<void> play({
+    int startTimeMs = 0,
+    int driftCorrectionUs = 0,
+  }) {
     throw UnimplementedError('play() has not been implemented.');
   }
 
@@ -85,6 +88,10 @@ abstract class MetronomePlatform extends PlatformInterface {
 
   Future<int?> getTimeSignature() {
     throw UnimplementedError('getTimeSignature() has not been implemented.');
+  }
+
+  Future<void> applyDriftCorrection(int driftCorrectionUs) {
+    throw UnimplementedError('applyDriftCorrection() has not been implemented.');
   }
 
   Future<void> destroy() {

@@ -57,9 +57,17 @@ class Metronome {
     }
   }
 
-  ///play the metronome
-  Future<void> play() async {
-    return MetronomePlatform.instance.play();
+  /// Play the metronome with optional scheduled start time
+  /// @param startTimeMs Unix timestamp in milliseconds (0 = immediate start)
+  /// @param driftCorrectionUs Drift correction in microseconds for phase alignment (0 = no correction)
+  Future<void> play({
+    int startTimeMs = 0,
+    int driftCorrectionUs = 0,
+  }) async {
+    return MetronomePlatform.instance.play(
+      startTimeMs: startTimeMs,
+      driftCorrectionUs: driftCorrectionUs,
+    );
   }
 
   ///pause the metronome
@@ -115,6 +123,14 @@ class Metronome {
   Future<int> getTimeSignature() async {
     int? timeSignature = await MetronomePlatform.instance.getTimeSignature();
     return timeSignature ?? 0;
+  }
+
+  /// Apply drift correction to align metronome phase
+  /// @param driftCorrectionUs Phase shift in microseconds (non-accumulative)
+  ///   - Positive value: shift forward (we're behind)
+  ///   - Negative value: shift backward (we're ahead)
+  Future<void> applyDriftCorrection(int driftCorrectionUs) async {
+    return MetronomePlatform.instance.applyDriftCorrection(driftCorrectionUs);
   }
 
   ///destroy the metronome

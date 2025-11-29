@@ -73,9 +73,15 @@ class MethodChannelMetronome extends MetronomePlatform {
   }
 
   @override
-  Future<void> play() async {
+  Future<void> play({
+    int startTimeMs = 0,
+    int driftCorrectionUs = 0,
+  }) async {
     try {
-      await methodChannel.invokeMethod<void>('play');
+      await methodChannel.invokeMethod<void>('play', {
+        'startTimeMs': startTimeMs,
+        'driftCorrectionUs': driftCorrectionUs,
+      });
     } catch (e) {
       if (kDebugMode) {
         print(e);
@@ -225,6 +231,19 @@ class MethodChannelMetronome extends MetronomePlatform {
       await methodChannel.invokeMethod<void>('setAudioFile', {
         'mainFileBytes': mainFileBytes,
         'accentedFileBytes': accentedFileBytes,
+      });
+    } catch (e) {
+      if (kDebugMode) {
+        print(e);
+      }
+    }
+  }
+
+  @override
+  Future<void> applyDriftCorrection(int driftCorrectionUs) async {
+    try {
+      await methodChannel.invokeMethod<void>('applyDriftCorrection', {
+        'driftCorrectionUs': driftCorrectionUs,
       });
     } catch (e) {
       if (kDebugMode) {
