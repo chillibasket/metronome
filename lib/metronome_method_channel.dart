@@ -74,13 +74,13 @@ class MethodChannelMetronome extends MetronomePlatform {
 
   @override
   Future<void> play({
-    int startTimeMs = 0,
-    int driftCorrectionUs = 0,
+    int startTimeUs = 0,
+    int correctionUs = 0,
   }) async {
     try {
       await methodChannel.invokeMethod<void>('play', {
-        'startTimeMs': startTimeMs,
-        'driftCorrectionUs': driftCorrectionUs,
+        'startTimeUs': startTimeUs,
+        'correctionUs': correctionUs,
       });
     } catch (e) {
       if (kDebugMode) {
@@ -240,15 +240,28 @@ class MethodChannelMetronome extends MetronomePlatform {
   }
 
   @override
-  Future<void> applyDriftCorrection(int driftCorrectionUs) async {
+  Future<void> setCorrectionUs(int correctionUs) async {
     try {
-      await methodChannel.invokeMethod<void>('applyDriftCorrection', {
-        'driftCorrectionUs': driftCorrectionUs,
+      await methodChannel.invokeMethod<int>('setCorrectionUs', {
+        'correctionUs': correctionUs,
       });
     } catch (e) {
       if (kDebugMode) {
         print(e);
       }
+    }
+  }
+
+  @override
+  Future<int?> getTimeUs() async {
+    try {
+      return await methodChannel.invokeMethod<int>('getTimeUs');
+    } catch (e) {
+      if (kDebugMode) {
+        print(e);
+      }
+
+      return 0;
     }
   }
 

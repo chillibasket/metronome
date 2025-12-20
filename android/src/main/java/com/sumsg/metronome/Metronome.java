@@ -30,11 +30,9 @@ public class Metronome {
     
     // Synchronization primitives
     private final int MAX_DRIFT_CORRECTION;
-    private long epochStartTimeMs = 0;
-    private long scheduledStartTimeNs = 0;
-    private long audioStartTimeNs = 0;
-    private volatile long targetCorrectionNs = 0;
-    private long actualCorrectionNs = 0;
+    private long timePerBarUs = 0;
+    private long startTimeUs = 0; 
+    private volatile long correctionUs = 0;
 
     @SuppressWarnings("deprecation")
     public Metronome(byte[] mainFileBytes, byte[] accentedFileBytes, int bpm, int timeSignature, float volume,
@@ -78,20 +76,13 @@ public class Metronome {
         play(0, 0);
     }
 
-    public void play(long startTimeMs, long driftCorrectionUs) {
+    public void play(long startTimeUs, long correctionUs) {
         if (!isPlaying()) {
-            this.epochStartTimeMs = System.currentTimeMillis();
-            this.audioStartTimeNs = System.nanoTime();
-            this.targetCorrectionNs = driftCorrectionUs * 1000;
-            this.actualCorrectionNs = 0;
-            this.scheduledStartTimeNs = this.audioStartTimeNs;
-
-            if (startTimeMs > 0) {
-                this.scheduledStartTimeNs += (startTimeMs - this.epochStartTimeMs) * 1000000L;
-            }
-        
+            this.startTimeUs = startTimeUs;
+            this.correctionUs = correctionUs;
             updated = true;
             onTick();
+
             // Send immediate tick event to match iOS behavior
             if (eventTickSink != null) {
                 eventTickSink.success(0);  // Send tick 0 immediately
@@ -103,8 +94,8 @@ public class Metronome {
         }
     }
     
-    public void applyDriftCorrection(long correctionUs) {
-        this.targetCorrectionNs = correctionUs * 1000;
+    public void setCorrectionUs(long correctionUs) {
+        this.correctionUs = correctionUs;
     }
 
     public void pause() {
@@ -180,7 +171,9 @@ public class Metronome {
 
     private short[] generateBuffer() {
         currentTick = 0;
-        int framesPerBeat = (int) (SAMPLE_RATE * 60 / (float) audioBpm);
+        int framesPerBeat = (int) (SAMPLE_RATE * 60 / audioBpm);
+        timePerBarUs = 60000000L * audioTimeSignature / audioBpm;
+
         short[] bufferBar;
         if (audioTimeSignature < 2) {
             bufferBar = new short[framesPerBeat + MAX_DRIFT_CORRECTION];
@@ -203,7 +196,7 @@ public class Metronome {
     void onTick() {
         if (eventTickSink == null)
             return;
-        int framesPerBeat = (int) ((SAMPLE_RATE * 60.0) / audioBpm);
+        int framesPerBeat = (int) (SAMPLE_RATE * 60 / audioBpm);
         audioTrack.setPlaybackPositionUpdateListener(new AudioTrack.OnPlaybackPositionUpdateListener() {
             @Override
             public void onMarkerReached(AudioTrack track) {
@@ -231,38 +224,58 @@ public class Metronome {
 
     private void startMetronome() {
         new Thread(() -> {
+
+            long averageErrorUs = 0;
+            int trackLengthFrames = 0;
+            int delayFrames = 0;
+
             while (isPlaying()) {
                 synchronized (mLock) {
                     if (!isPlaying()) {
                         return;
                     }
+
                     if (updated) {
                         audioBuffer = generateBuffer();
+                        trackLengthFrames = audioBuffer.length - MAX_DRIFT_CORRECTION;
 
-                        // Wait for the scheduled start time
-                        long waitTimeNs = scheduledStartTimeNs + targetCorrectionNs - System.nanoTime();
-                        if (waitTimeNs > 0) {
-                            actualCorrectionNs = targetCorrectionNs;
-                            short[] delayBuffer = new short[(int) (waitTimeNs * SAMPLE_RATE / 1000000000L)];
-                            audioTrack.setPositionNotificationPeriod(0);
-                            audioTrack.write(delayBuffer, 0, delayBuffer.length);
-                        } else {
-                            actualCorrectionNs = targetCorrectionNs - waitTimeNs;
-                        }
-                    } else {
-                        int trackLengthFrames = audioBuffer.length - MAX_DRIFT_CORRECTION;
-                        int delayFrames = 0;
+                        // Wait for the scheduled start time - if time was missed, wait for next bar
+                        if (startTimeUs != 0) {
+                            long waitTimeUs = (startTimeUs + correctionUs) - (System.nanoTime() / 1000L);
 
-                        if (Math.abs(targetCorrectionNs - actualCorrectionNs) > 1000) {
-                            delayFrames = (int) ((targetCorrectionNs - actualCorrectionNs) * (float)SAMPLE_RATE / 1000000000L);
+                            while (waitTimeUs < -1000L) waitTimeUs += timePerBarUs;
+                            while (waitTimeUs > timePerBarUs) waitTimeUs -= timePerBarUs;
 
-                            if (delayFrames > MAX_DRIFT_CORRECTION) {
-                                delayFrames = MAX_DRIFT_CORRECTION;
-                            } else if (delayFrames < -MAX_DRIFT_CORRECTION) {
-                                delayFrames = -MAX_DRIFT_CORRECTION;
+                            //Log.d("Metronome", "Start time:" + startTimeUs + ", Correction:" + correctionUs + ", Current time:" + (System.nanoTime() / 1000L) + ", Wait time:" + waitTimeUs + ", Time per bar:" + timePerBarUs);
+
+                            if (waitTimeUs > 1000L) {
+                                short[] delayBuffer = new short[(int) (waitTimeUs * SAMPLE_RATE / 1000000L)];
+                                audioTrack.setPositionNotificationPeriod(0);
+                                audioTrack.write(delayBuffer, 0, delayBuffer.length);
                             }
-                            
-                            actualCorrectionNs += delayFrames * 1000000000L / SAMPLE_RATE;
+                        }
+
+                    } else {
+
+                        // Check if timing of the metronome needs to be adjusted
+                        if (startTimeUs != 0) {
+                            long runTimeUs = (System.nanoTime() / 1000L) - (startTimeUs + correctionUs);
+                            long targetBars = Math.round(runTimeUs / (float)timePerBarUs);
+                            long errorTimeUs = (targetBars * timePerBarUs) - runTimeUs;
+                            averageErrorUs = (averageErrorUs * 2 + errorTimeUs) / 3;
+
+                            if (Math.abs(averageErrorUs) > 2000L) {
+                                delayFrames = (int) (averageErrorUs * SAMPLE_RATE / 1000000L);
+                                if (delayFrames > MAX_DRIFT_CORRECTION) {
+                                    delayFrames = MAX_DRIFT_CORRECTION;
+                                } else if (delayFrames < -MAX_DRIFT_CORRECTION) {
+                                    delayFrames = -MAX_DRIFT_CORRECTION;
+                                }
+                            }
+
+                            //Log.d("Metronome", "Correction: " + delayFrames + " frames" + " (avg. error " + (averageErrorUs / 1000L) + " ms, error " + (errorTimeUs / 1000L) + " ms, bars " + targetBars + ", correctionUs " + correctionUs + ")");
+                        } else {
+                            delayFrames = 0;
                         }
 
                         // Play the audio buffer

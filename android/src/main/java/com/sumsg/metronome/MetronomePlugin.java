@@ -51,19 +51,19 @@ public class MetronomePlugin implements FlutterPlugin, MethodCallHandler {
         metronomeInit(call);
         break;
       case "play":
-        long startTimeMs = 0;
-        long driftCorrectionUs = 0;
+        long startTimeUs = 0;
+        long correctionUs = 0;
         
-        if (call.argument("startTimeMs") != null) {
-          Number startTimeMsNum = call.argument("startTimeMs");
-          startTimeMs = startTimeMsNum != null ? startTimeMsNum.longValue() : 0L;
+        if (call.argument("startTimeUs") != null) {
+          Number startTimeUsNum = call.argument("startTimeUs");
+          startTimeUs = startTimeUsNum != null ? startTimeUsNum.longValue() : 0L;
         }
-        if (call.argument("driftCorrectionUs") != null) {
-          Number driftCorrectionUsNum = call.argument("driftCorrectionUs");
-          driftCorrectionUs = driftCorrectionUsNum != null ? driftCorrectionUsNum.longValue() : 0L;
+        if (call.argument("correctionUs") != null) {
+          Number correctionUsNum = call.argument("correctionUs");
+          correctionUs = correctionUsNum != null ? correctionUsNum.longValue() : 0L;
         }
         
-        metronome.play(startTimeMs, driftCorrectionUs);
+        metronome.play(startTimeUs, correctionUs);
         break;
       case "pause":
         metronome.pause();
@@ -95,13 +95,16 @@ public class MetronomePlugin implements FlutterPlugin, MethodCallHandler {
       case "setAudioFile":
         setAudioFile(call);
         break;
-      case "applyDriftCorrection":
-        long correctionUs = 0;
-        if (call.argument("driftCorrectionUs") != null) {
-          Number correctionUsNum = call.argument("driftCorrectionUs");
+      case "getTimeUs":
+        result.success(System.nanoTime() / 1000L);
+        break;
+      case "setCorrectionUs":
+        correctionUs = 0;
+        if (call.argument("correctionUs") != null) {
+          Number correctionUsNum = call.argument("correctionUs");
           correctionUs = correctionUsNum != null ? correctionUsNum.longValue() : 0L;
         }
-        metronome.applyDriftCorrection(correctionUs);
+        metronome.setCorrectionUs(correctionUs);
         break;
       case "destroy":
         metronome.destroy();

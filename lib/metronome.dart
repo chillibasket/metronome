@@ -58,15 +58,15 @@ class Metronome {
   }
 
   /// Play the metronome with optional scheduled start time
-  /// @param startTimeMs Unix timestamp in milliseconds (0 = immediate start)
-  /// @param driftCorrectionUs Drift correction in microseconds for phase alignment (0 = no correction)
+  /// @param startTimeUs Start time relative to audio reference clock in microseconds (0 = immediate start)
+  /// @param correctionUs Drift correction in microseconds for phase alignment (0 = no correction)
   Future<void> play({
-    int startTimeMs = 0,
-    int driftCorrectionUs = 0,
+    int startTimeUs = 0,
+    int correctionUs = 0,
   }) async {
     return MetronomePlatform.instance.play(
-      startTimeMs: startTimeMs,
-      driftCorrectionUs: driftCorrectionUs,
+      startTimeUs: startTimeUs,
+      correctionUs: correctionUs,
     );
   }
 
@@ -126,11 +126,17 @@ class Metronome {
   }
 
   /// Apply drift correction to align metronome phase
-  /// @param driftCorrectionUs Phase shift in microseconds (non-accumulative)
+  /// @param correctionUs Phase shift in microseconds (non-accumulative)
   ///   - Positive value: shift forward (we're behind)
   ///   - Negative value: shift backward (we're ahead)
-  Future<void> applyDriftCorrection(int driftCorrectionUs) async {
-    return MetronomePlatform.instance.applyDriftCorrection(driftCorrectionUs);
+  Future<void> setCorrectionUs(int correctionUs) async {
+    return MetronomePlatform.instance.setCorrectionUs(correctionUs);
+  }
+
+  ///get the current time of the audio refence clock
+  Future<int> getTimeUs() async {
+    int? timeUs = await MetronomePlatform.instance.getTimeUs();
+    return timeUs ?? 0;
   }
 
   ///destroy the metronome

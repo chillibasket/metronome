@@ -33,6 +33,8 @@ class MetronomeWeb extends MetronomePlatform {
   bool _enableTickCallback = false;
   int _sampleRate = 44100;
   //
+  int _startTimeUs = 0;
+  int _correctionUs = 0;
   double _nextBeatTime = 0;
   int _scheduleTimer = 0;
   final double _lookahead = 0.1;
@@ -69,8 +71,13 @@ class MetronomeWeb extends MetronomePlatform {
   }
 
   @override
-  Future<void> play() async {
+  Future<void> play({
+    int startTimeUs = 0, 
+    int correctionUs = 0
+  }) async {
     if (_isPlaying) return;
+    _startTimeUs = startTimeUs;
+    _correctionUs = correctionUs;
     _isPlaying = true;
     _currentTick = 0;
     startScheduler();

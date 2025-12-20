@@ -17,9 +17,9 @@ class _MyAppState extends State<MyApp> {
   bool isplaying = false;
   int bpm = 120;
   int vol = 50;
-  int epochStartTime = 0;
-  int startTimeOffset = 0;
-  int driftCorrection = 0;
+  int startTimeUs = 0;
+  int startTimeOffsetMs = 0;
+  int correctionMs = 0;
   int timeSignature = 4;
   String metronomeIcon = 'assets/metronome-left.png';
   String metronomeIconRight = 'assets/metronome-right.png';
@@ -49,10 +49,11 @@ class _MyAppState extends State<MyApp> {
     );
     print("init:${_metronomePlugin.isInitialized}");
     _metronomePlugin.tickStream.listen(
-      (int tick) {
+      (int tick) async {
         currentTick = tick;
+        int timeUs = await _metronomePlugin.getTimeUs();
         print(
-            "tick: $tick, ${DateTime.now().millisecondsSinceEpoch - epochStartTime}");
+            "tick: $tick, ${(timeUs - startTimeUs) / 1000}");
         if (metronomeIcon == metronomeIconRight) {
           metronomeIcon = metronomeIconLeft;
         } else {
@@ -132,34 +133,34 @@ class _MyAppState extends State<MyApp> {
                 },
               ),
               Text(
-                'Drift correction:$driftCorrection',
+                'Drift correction (ms): $correctionMs',
                 style: const TextStyle(fontSize: 20),
               ),
               Slider(
-                value: driftCorrection.toDouble(),
-                min: -5000,
-                max: 5000,
+                value: correctionMs.toDouble(),
+                min: -2000,
+                max: 2000,
                 divisions: 100,
                 onChangeEnd: (val) {
-                  _metronomePlugin.applyDriftCorrection(driftCorrection * 1000);
+                  _metronomePlugin.setCorrectionUs(correctionMs * 1000);
                 },
                 onChanged: (val) {
-                  driftCorrection = val.toInt();
+                  correctionMs = val.toInt();
                   setState(() {});
                 },
               ),
               Text(
-                'Start Time Offset:$startTimeOffset',
+                'Start Time Offset (ms): $startTimeOffsetMs',
                 style: const TextStyle(fontSize: 20),
               ),
               Slider(
-                value: startTimeOffset.toDouble(),
-                min: -2000,
-                max: 2000,
-                divisions: 100,
+                value: startTimeOffsetMs.toDouble(),
+                min: -1000,
+                max: 1000,
+                divisions: 200,
                 onChangeEnd: (val) {},
                 onChanged: (val) {
-                  startTimeOffset = val.toInt();
+                  startTimeOffsetMs = val.toInt();
                   setState(() {});
                 },
               ),
@@ -205,12 +206,12 @@ class _MyAppState extends State<MyApp> {
               _metronomePlugin.pause();
               isplaying = false;
             } else {
-              epochStartTime = DateTime.now().millisecondsSinceEpoch;
-              if (startTimeOffset >= 0) {
-                epochStartTime += startTimeOffset;
+              startTimeUs = await _metronomePlugin.getTimeUs();
+              if (startTimeOffsetMs >= 0) {
+                startTimeUs += startTimeOffsetMs * 1000;
                 _metronomePlugin.play(
-                    startTimeMs: epochStartTime,
-                    driftCorrectionUs: driftCorrection);
+                    startTimeUs: startTimeUs,
+                    correctionUs: correctionMs * 1000);
               } else {
                 _metronomePlugin.play();
               }
