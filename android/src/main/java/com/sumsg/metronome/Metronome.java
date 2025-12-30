@@ -21,10 +21,12 @@ public class Metronome {
     private short[] accentedSound;
     private short[] audioBuffer;
     private final int SAMPLE_RATE;
+    private final int PRERUN_FRAMES;
     public int audioBpm;
     public int audioTimeSignature;
     public float audioVolume;
     private boolean updated = false;
+    private boolean correctionRequired = false;
     private EventChannel.EventSink eventTickSink;
     private int currentTick = 0;
     private int startBarFrames = 0;
@@ -71,6 +73,10 @@ public class Metronome {
             audioTrack = new AudioTrack(AudioManager.STREAM_MUSIC, SAMPLE_RATE, AudioFormat.CHANNEL_OUT_MONO,
                     AudioFormat.ENCODING_PCM_16BIT, SAMPLE_RATE, AudioTrack.MODE_STREAM);
         }
+
+        PRERUN_FRAMES = audioTrack.getMinBufferSize(
+            SAMPLE_RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT
+        );
         setVolume(volume);
     }
 
@@ -232,6 +238,7 @@ public class Metronome {
 
             int trackLengthFrames = 0;
             int delayFrames = 0;
+            correctionRequired = false;
 
             while (isPlaying()) {
                 synchronized (mLock) {
@@ -243,30 +250,67 @@ public class Metronome {
                         audioBuffer = generateBuffer();
                         trackLengthFrames = audioBuffer.length - MAX_DRIFT_CORRECTION;
 
-                        // Wait for the scheduled start time - if time was missed, wait for next bar
+                        // Spin up the audio stream (using silence) so that an 
+                        // accurate metronome start time can be calculated
                         if (startTimeUs != 0) {
-                            long waitTimeUs = (startTimeUs + correctionUs) - (System.nanoTime() / 1000L);
+                            correctionRequired = true;   
+                            short[] delayBuffer = new short[PRERUN_FRAMES];
+                            audioTrack.write(delayBuffer, 0, delayBuffer.length);
+                            nextBarFrames += delayBuffer.length;
+                        } else {
+                            audioTrack.setNotificationMarkerPosition(nextBarFrames);
+                        }
+
+                    } else if (correctionRequired) {
+                        long currentTimeUs = (System.nanoTime() / 1000L);
+                        int currentFrames = audioTrack.getPlaybackHeadPosition();
+
+                        if (currentFrames > 0) {
+                            // Wait for the scheduled start time - if time was missed, wait for next bar
+                            correctionRequired = false;    
+                            long waitTimeUs = startTimeUs + correctionUs - (currentTimeUs + ((PRERUN_FRAMES - currentFrames) * 1000000L / SAMPLE_RATE));
 
                             while (waitTimeUs < -1000L) waitTimeUs += timePerBarUs;
                             while (waitTimeUs > timePerBarUs) waitTimeUs -= timePerBarUs;
 
-                            //Log.d("Metronome", "Start time:" + startTimeUs + ", Correction:" + correctionUs + ", Current time:" + (System.nanoTime() / 1000L) + ", Wait time:" + waitTimeUs + ", Time per bar:" + timePerBarUs);
-
                             if (waitTimeUs > 1000L) {
                                 short[] delayBuffer = new short[(int) (waitTimeUs * SAMPLE_RATE / 1000000L)];
-                                audioTrack.setPositionNotificationPeriod(0);
-                                audioTrack.write(delayBuffer, 0, delayBuffer.length);
+
                                 nextBarFrames += delayBuffer.length;
                                 startBarFrames = nextBarFrames - (int)(correctionUs * SAMPLE_RATE / 1000000L);
+
+                                audioTrack.write(delayBuffer, 0, delayBuffer.length);
+
+                                //Log.d("Metronome", "Start time:" + startTimeUs 
+                                //    + ", Correction:" + correctionUs 
+                                //    + ", CurrentFrames: " + currentFrames 
+                                //    + ", Current time:" + currentTimeUs 
+                                //    + ", Wait time:" + waitTimeUs 
+                                //    + ", Time per bar:" + timePerBarUs
+                                //    + ", NextBarFrames: " + nextBarFrames 
+                                //    + ", StartBarFrames: " + startBarFrames 
+                                //    + ", delayBuffer.length: " + delayBuffer.length);
                             }
+
+                            audioTrack.setNotificationMarkerPosition(nextBarFrames);
                         }
 
-                        audioTrack.setNotificationMarkerPosition(nextBarFrames);
-
-                    } else {
+                    } else if (!correctionRequired) {
                         long runFrames = (nextBarFrames - startBarFrames) - (correctionUs * SAMPLE_RATE / 1000000L);
                         long targetBars = Math.round(runFrames / (float)(trackLengthFrames));
                         long errorCorrectionFrames = (targetBars * trackLengthFrames) - runFrames;
+
+                        //long timeNowUs = (System.nanoTime() / 1000L);
+                        //int currentFrames = audioTrack.getPlaybackHeadPosition();
+                        //long expectedFrames = (timeNowUs - startTimeUs) * SAMPLE_RATE / 1000000L;
+                        //long errorFrames = currentFrames - startBarFrames - expectedFrames;
+                        //Log.d("Metronome", "Start time: " + startTimeUs 
+                        //    + ", Correction: " + correctionUs 
+                        //    + ", Current time: " + timeNowUs
+                        //    + ", Current frames: " + (currentFrames - startBarFrames)
+                        //    + ", Expected frames: " + expectedFrames
+                        //    + ", Error Frames: " + errorFrames 
+                        //    + ", Bar: " + targetBars);
 
                         if (errorCorrectionFrames != 0) {
                             delayFrames = (int)(errorCorrectionFrames);
@@ -275,7 +319,6 @@ public class Metronome {
                             } else if (delayFrames < -MAX_DRIFT_CORRECTION) {
                                 delayFrames = -MAX_DRIFT_CORRECTION;
                             }
-
                             //Log.d("Metronome", "delayFrames: " + delayFrames + ", nextBarFrames: " + nextBarFrames + ", startBarFrames: " + startBarFrames + ", runFrames: " + runFrames + ", targetBars: " + targetBars + ", errorCorrectionFrames: " + errorCorrectionFrames);
                         } else {
                             delayFrames = 0;
