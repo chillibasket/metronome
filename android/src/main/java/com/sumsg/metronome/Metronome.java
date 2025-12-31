@@ -300,17 +300,17 @@ public class Metronome {
                         long targetBars = Math.round(runFrames / (float)(trackLengthFrames));
                         long errorCorrectionFrames = (targetBars * trackLengthFrames) - runFrames;
 
-                        //long timeNowUs = (System.nanoTime() / 1000L);
-                        //int currentFrames = audioTrack.getPlaybackHeadPosition();
-                        //long expectedFrames = (timeNowUs - startTimeUs) * SAMPLE_RATE / 1000000L;
-                        //long errorFrames = currentFrames - startBarFrames - expectedFrames;
-                        //Log.d("Metronome", "Start time: " + startTimeUs 
-                        //    + ", Correction: " + correctionUs 
-                        //    + ", Current time: " + timeNowUs
-                        //    + ", Current frames: " + (currentFrames - startBarFrames)
-                        //    + ", Expected frames: " + expectedFrames
-                        //    + ", Error Frames: " + errorFrames 
-                        //    + ", Bar: " + targetBars);
+                        long timeNowUs = (System.nanoTime() / 1000L);
+                        int currentFrames = audioTrack.getPlaybackHeadPosition();
+                        long expectedFrames = (timeNowUs - startTimeUs) * SAMPLE_RATE / 1000000L;
+                        long errorFrames = currentFrames - startBarFrames - expectedFrames;
+                        Log.d("Metronome", "Start time: " + startTimeUs 
+                            + ", Correction: " + correctionUs 
+                            + ", Current time: " + timeNowUs
+                            + ", Current frames: " + (currentFrames - startBarFrames)
+                            + ", Expected frames: " + expectedFrames
+                            + ", Error Frames: " + errorFrames 
+                            + ", Bar: " + targetBars);
 
                         if (errorCorrectionFrames != 0) {
                             delayFrames = (int)(errorCorrectionFrames);
