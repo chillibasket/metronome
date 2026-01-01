@@ -207,7 +207,7 @@ class _MyAppState extends State<MyApp> {
               isplaying = false;
             } else {
               startTimeUs = await _metronomePlugin.getTimeUs();
-              if (startTimeOffsetMs >= 0) {
+              if (startTimeOffsetMs != 0) {
                 startTimeUs += startTimeOffsetMs * 1000;
                 _metronomePlugin.play(
                     startTimeUs: startTimeUs,

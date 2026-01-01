@@ -5,6 +5,7 @@ import static android.media.AudioTrack.PLAYSTATE_PLAYING;
 import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.media.AudioTrack;
+import android.media.AudioTimestamp;
 import android.os.Build;
 import android.util.Log;
 
@@ -98,8 +99,6 @@ public class Metronome {
                 eventTickSink.success(0);  // Send tick 0 immediately
             }
 
-            audioTrack.flush();
-            audioTrack.play();
             startMetronome();
         }
     }
@@ -239,6 +238,15 @@ public class Metronome {
             int trackLengthFrames = 0;
             int delayFrames = 0;
             correctionRequired = false;
+            AudioTimestamp timestamp = new AudioTimestamp();
+
+            // Prime the audio track with silence and then start playback
+            short[] silenceBuffer = new short[2 * PRERUN_FRAMES];
+            nextBarFrames = silenceBuffer.length + 1;
+            startBarFrames = nextBarFrames;
+            audioTrack.flush();
+            audioTrack.write(silenceBuffer, 0, silenceBuffer.length);
+            audioTrack.play();
 
             while (isPlaying()) {
                 synchronized (mLock) {
@@ -250,49 +258,51 @@ public class Metronome {
                         audioBuffer = generateBuffer();
                         trackLengthFrames = audioBuffer.length - MAX_DRIFT_CORRECTION;
 
-                        // Spin up the audio stream (using silence) so that an 
-                        // accurate metronome start time can be calculated
                         if (startTimeUs != 0) {
+                            // Play more silence to allow timing readings to settle
+                            // Otherwise we can't get a good reading of the start time
+                            audioTrack.write(silenceBuffer, 0, silenceBuffer.length);
+                            nextBarFrames += silenceBuffer.length;
+                            startBarFrames = nextBarFrames;
                             correctionRequired = true;   
-                            short[] delayBuffer = new short[PRERUN_FRAMES];
-                            audioTrack.write(delayBuffer, 0, delayBuffer.length);
-                            nextBarFrames += delayBuffer.length;
                         } else {
                             audioTrack.setNotificationMarkerPosition(nextBarFrames);
                         }
 
                     } else if (correctionRequired) {
-                        long currentTimeUs = (System.nanoTime() / 1000L);
-                        int currentFrames = audioTrack.getPlaybackHeadPosition();
 
-                        if (currentFrames > 0) {
+                        boolean timestampSuccess = audioTrack.getTimestamp(timestamp);
+
+                        if (timestampSuccess) {
+                            correctionRequired = false;
+                            long currentFrames = (int)timestamp.framePosition;
+                            long currentTimeUs = timestamp.nanoTime / 1000L;
+
                             // Wait for the scheduled start time - if time was missed, wait for next bar
-                            correctionRequired = false;    
-                            long waitTimeUs = startTimeUs + correctionUs - (currentTimeUs + ((PRERUN_FRAMES - currentFrames) * 1000000L / SAMPLE_RATE));
+                            int waitFrames = (int)((startTimeUs + correctionUs - currentTimeUs) * SAMPLE_RATE / 1000000L) - (int)(nextBarFrames - currentFrames);
+                            startBarFrames = nextBarFrames + waitFrames - (int)(correctionUs * SAMPLE_RATE / 1000000L);
 
-                            while (waitTimeUs < -1000L) waitTimeUs += timePerBarUs;
-                            while (waitTimeUs > timePerBarUs) waitTimeUs -= timePerBarUs;
+                            while (waitFrames > trackLengthFrames) waitFrames -= trackLengthFrames;
+                            while (waitFrames < 0) waitFrames += trackLengthFrames;
 
-                            if (waitTimeUs > 1000L) {
-                                short[] delayBuffer = new short[(int) (waitTimeUs * SAMPLE_RATE / 1000000L)];
+                            short[] delayBuffer = new short[waitFrames];
+                            nextBarFrames += delayBuffer.length;
 
-                                nextBarFrames += delayBuffer.length;
-                                startBarFrames = nextBarFrames - (int)(correctionUs * SAMPLE_RATE / 1000000L);
-
-                                audioTrack.write(delayBuffer, 0, delayBuffer.length);
-
-                                //Log.d("Metronome", "Start time:" + startTimeUs 
-                                //    + ", Correction:" + correctionUs 
-                                //    + ", CurrentFrames: " + currentFrames 
-                                //    + ", Current time:" + currentTimeUs 
-                                //    + ", Wait time:" + waitTimeUs 
-                                //    + ", Time per bar:" + timePerBarUs
-                                //    + ", NextBarFrames: " + nextBarFrames 
-                                //    + ", StartBarFrames: " + startBarFrames 
-                                //    + ", delayBuffer.length: " + delayBuffer.length);
-                            }
-
+                            audioTrack.write(delayBuffer, 0, delayBuffer.length);
                             audioTrack.setNotificationMarkerPosition(nextBarFrames);
+
+                            Log.d("Metronome", "Start time:" + startTimeUs 
+                                + ", Correction:" + correctionUs
+                                + ", Timestamp Success: " + timestampSuccess
+                                + ", CurrentFrames: " + currentFrames 
+                                + ", Current time:" + currentTimeUs 
+                                + ", Prerun Frames: " + PRERUN_FRAMES
+                                + ", Wait Frames:" + waitFrames
+                                + ", Time per bar:" + timePerBarUs
+                                + ", NextBarFrames: " + nextBarFrames 
+                                + ", StartBarFrames: " + startBarFrames 
+                                + ", TrackLength Frames: " + trackLengthFrames
+                                + ", delayBuffer.length: " + delayBuffer.length);
                         }
 
                     } else if (!correctionRequired) {
@@ -300,17 +310,28 @@ public class Metronome {
                         long targetBars = Math.round(runFrames / (float)(trackLengthFrames));
                         long errorCorrectionFrames = (targetBars * trackLengthFrames) - runFrames;
 
-                        long timeNowUs = (System.nanoTime() / 1000L);
-                        int currentFrames = audioTrack.getPlaybackHeadPosition();
-                        long expectedFrames = (timeNowUs - startTimeUs) * SAMPLE_RATE / 1000000L;
-                        long errorFrames = currentFrames - startBarFrames - expectedFrames;
-                        Log.d("Metronome", "Start time: " + startTimeUs 
-                            + ", Correction: " + correctionUs 
-                            + ", Current time: " + timeNowUs
-                            + ", Current frames: " + (currentFrames - startBarFrames)
-                            + ", Expected frames: " + expectedFrames
-                            + ", Error Frames: " + errorFrames 
-                            + ", Bar: " + targetBars);
+                        boolean timestampSuccess = audioTrack.getTimestamp(timestamp);
+                        if (timestampSuccess) {
+                            long currentFrames = timestamp.framePosition;
+                            long timeNowUs = timestamp.nanoTime / 1000L;
+                            long expectedFrames = (timeNowUs - startTimeUs - correctionUs) * SAMPLE_RATE / 1000000L;
+                            long errorFrames = currentFrames - startBarFrames - expectedFrames;
+                            
+                            //if (Math.abs(erorFrames) > 100) {
+                            //    errorCorrectionFrames -= errorFrames;
+                            //    startBarFrames -= errorFrames;
+                            //}
+
+                            Log.d("Metronome", "Start time: " + startTimeUs 
+                                + ", Correction: " + correctionUs 
+                                + ", Timestamp Success: " + timestampSuccess
+                                + ", Current time: " + timeNowUs
+                                + ", Current frames: " + (currentFrames - startBarFrames)
+                                + ", Expected frames: " + expectedFrames
+                                + ", Error Frames: " + errorFrames
+                                + ", Correction Frames: " + errorCorrectionFrames
+                                + ", Bar: " + targetBars);
+                        }
 
                         if (errorCorrectionFrames != 0) {
                             delayFrames = (int)(errorCorrectionFrames);
