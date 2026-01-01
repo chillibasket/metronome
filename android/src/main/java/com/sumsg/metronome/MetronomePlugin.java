@@ -1,5 +1,6 @@
 package com.sumsg.metronome;
 
+import android.os.SystemClock;
 import androidx.annotation.NonNull;
 import io.flutter.embedding.engine.plugins.FlutterPlugin;
 import io.flutter.plugin.common.EventChannel;
@@ -96,7 +97,7 @@ public class MetronomePlugin implements FlutterPlugin, MethodCallHandler {
         setAudioFile(call);
         break;
       case "getTimeUs":
-        result.success(System.nanoTime() / 1000L);
+        result.success(SystemClock.elapsedRealtimeNanos() / 1000L);
         break;
       case "setCorrectionUs":
         correctionUs = 0;

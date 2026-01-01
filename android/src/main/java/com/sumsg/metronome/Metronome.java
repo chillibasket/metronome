@@ -7,6 +7,7 @@ import android.media.AudioManager;
 import android.media.AudioTrack;
 import android.media.AudioTimestamp;
 import android.os.Build;
+import android.os.SystemClock;
 import android.util.Log;
 
 import android.media.AudioAttributes;
@@ -275,8 +276,10 @@ public class Metronome {
 
                         if (timestampSuccess) {
                             correctionRequired = false;
+                            long monotonicTimeNs = System.nanoTime();
+                            long bootTimeNs = SystemClock.elapsedRealtimeNanos();
                             long currentFrames = (int)timestamp.framePosition;
-                            long currentTimeUs = timestamp.nanoTime / 1000L;
+                            long currentTimeUs = (timestamp.nanoTime + (bootTimeNs - monotonicTimeNs)) / 1000L;
 
                             // Wait for the scheduled start time - if time was missed, wait for next bar
                             int waitFrames = (int)((startTimeUs + correctionUs - currentTimeUs) * SAMPLE_RATE / 1000000L) - (int)(nextBarFrames - currentFrames);
@@ -312,8 +315,10 @@ public class Metronome {
 
                         boolean timestampSuccess = audioTrack.getTimestamp(timestamp);
                         if (timestampSuccess) {
+                            long monotonicTimeNs = System.nanoTime();
+                            long bootTimeNs = SystemClock.elapsedRealtimeNanos();
                             long currentFrames = timestamp.framePosition;
-                            long timeNowUs = timestamp.nanoTime / 1000L;
+                            long timeNowUs = (timestamp.nanoTime + (bootTimeNs - monotonicTimeNs)) / 1000L;
                             long expectedFrames = (timeNowUs - startTimeUs - correctionUs) * SAMPLE_RATE / 1000000L;
                             long errorFrames = currentFrames - startBarFrames - expectedFrames;
                             
