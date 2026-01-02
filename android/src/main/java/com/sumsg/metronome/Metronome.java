@@ -285,7 +285,8 @@ public class Metronome {
                             int waitFrames = (int)((startTimeUs + correctionUs - currentTimeUs) * SAMPLE_RATE / 1000000L) - (int)(nextBarFrames - currentFrames);
                             startBarFrames = nextBarFrames + waitFrames - (int)(correctionUs * SAMPLE_RATE / 1000000L);
 
-                            while (waitFrames > trackLengthFrames) waitFrames -= trackLengthFrames;
+                            int waitFramePre = waitFrames;
+                            //while (waitFrames > trackLengthFrames) waitFrames -= trackLengthFrames;
                             while (waitFrames < 0) waitFrames += trackLengthFrames;
 
                             short[] delayBuffer = new short[waitFrames];
@@ -294,18 +295,23 @@ public class Metronome {
                             audioTrack.write(delayBuffer, 0, delayBuffer.length);
                             audioTrack.setNotificationMarkerPosition(nextBarFrames);
 
-                            Log.d("Metronome", "Start time:" + startTimeUs 
+                            Log.d("Metronome", "\nStart time:" + startTimeUs 
                                 + ", Correction:" + correctionUs
                                 + ", Timestamp Success: " + timestampSuccess
                                 + ", CurrentFrames: " + currentFrames 
-                                + ", Current time:" + currentTimeUs 
+                                + ", currentTimeUs:" + currentTimeUs 
                                 + ", Prerun Frames: " + PRERUN_FRAMES
+                                + ", Total Prerun Time: " + ((nextBarFrames - delayBuffer.length) * 1000000 / SAMPLE_RATE)
+                                + ", Wait Frames Pre: " + waitFramePre
                                 + ", Wait Frames:" + waitFrames
                                 + ", Time per bar:" + timePerBarUs
                                 + ", NextBarFrames: " + nextBarFrames 
                                 + ", StartBarFrames: " + startBarFrames 
                                 + ", TrackLength Frames: " + trackLengthFrames
-                                + ", delayBuffer.length: " + delayBuffer.length);
+                                + ", delayBuffer.length: " + delayBuffer.length
+                                + ", BootTimeUs: " + (bootTimeNs / 1000L)
+                                + ", MonotonicTimeUs: " + (monotonicTimeNs / 1000L)
+                                + ", Timestamp TimeUs: " + timestamp.nanoTime + "\n");
                         }
 
                     } else if (!correctionRequired) {
