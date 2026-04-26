@@ -233,6 +233,7 @@ public class Metronome {
 
             int trackLengthFrames = 0;
             int delayFrames = 0;
+            boolean started = false;
             correctionRequired = false;
             AudioTimestamp timestamp = new AudioTimestamp();
 
@@ -254,7 +255,7 @@ public class Metronome {
                         audioBuffer = generateBuffer();
                         trackLengthFrames = audioBuffer.length - MAX_DRIFT_CORRECTION;
 
-                        if (startTimeUs != 0) {
+                        if (startTimeUs != 0 && !started) {
                             // Play more silence to allow timing readings to settle
                             // Otherwise we can't get a good reading of the start time
                             audioTrack.write(silenceBuffer, 0, silenceBuffer.length);
@@ -264,6 +265,8 @@ public class Metronome {
                         } else {
                             audioTrack.setNotificationMarkerPosition(nextBarFrames);
                         }
+
+                        started = true;
 
                     } else if (correctionRequired) {
 
