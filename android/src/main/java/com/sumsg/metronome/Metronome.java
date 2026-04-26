@@ -37,6 +37,7 @@ public class Metronome {
     // Synchronization primitives
     private final int MAX_DRIFT_CORRECTION;
     private long timePerBarUs = 0;
+    private int framesPerBeat = 0;
     private long startTimeUs = 0; 
     private volatile long correctionUs = 0;
 
@@ -101,6 +102,10 @@ public class Metronome {
             }
 
             startMetronome();
+        } else {
+            this.startTimeUs = startTimeUs;
+            this.correctionUs = correctionUs;
+            updated = true;
         }
     }
     
@@ -120,20 +125,14 @@ public class Metronome {
     public void setBPM(int bpm) {
         if (bpm != audioBpm) {
             audioBpm = bpm;
-            if (isPlaying()) {
-                pause();
-                play();
-            }
+            updated = true;
         }
     }
 
     public void setTimeSignature(int timeSignature) {
         if (timeSignature != audioTimeSignature) {
             audioTimeSignature = timeSignature;
-            if (isPlaying()) {
-                pause();
-                play();
-            }
+            updated = true;
         }
     }
 
@@ -145,10 +144,7 @@ public class Metronome {
             accentedSound = byteArrayToShortArray(accentedFileBytes);
         }
         if (mainFileBytes.length > 0 || accentedFileBytes.length > 0) {
-            if (isPlaying()) {
-                pause();
-                play();
-            }
+            updated = true;
         }
     }
 
@@ -181,7 +177,7 @@ public class Metronome {
 
     private short[] generateBuffer() {
         currentTick = 0;
-        int framesPerBeat = (int) (SAMPLE_RATE * 60 / audioBpm);
+        framesPerBeat = (int) (SAMPLE_RATE * 60 / audioBpm);
         timePerBarUs = 60000000L * audioTimeSignature / audioBpm;
 
         short[] bufferBar;
@@ -206,7 +202,6 @@ public class Metronome {
     void onTick() {
         if (eventTickSink == null)
             return;
-        int framesPerBeat = (int) (SAMPLE_RATE * 60 / audioBpm);
 
         audioTrack.setPlaybackPositionUpdateListener(new AudioTrack.OnPlaybackPositionUpdateListener() {
             @Override
@@ -295,23 +290,23 @@ public class Metronome {
                             audioTrack.write(delayBuffer, 0, delayBuffer.length);
                             audioTrack.setNotificationMarkerPosition(nextBarFrames);
 
-                            Log.d("Metronome", "\nStart time:" + startTimeUs 
-                                + ", Correction:" + correctionUs
-                                + ", Timestamp Success: " + timestampSuccess
-                                + ", CurrentFrames: " + currentFrames 
-                                + ", currentTimeUs:" + currentTimeUs 
-                                + ", Prerun Frames: " + PRERUN_FRAMES
-                                + ", Total Prerun Time: " + ((nextBarFrames - delayBuffer.length) * 1000000 / SAMPLE_RATE)
-                                + ", Wait Frames Pre: " + waitFramePre
-                                + ", Wait Frames:" + waitFrames
-                                + ", Time per bar:" + timePerBarUs
-                                + ", NextBarFrames: " + nextBarFrames 
-                                + ", StartBarFrames: " + startBarFrames 
-                                + ", TrackLength Frames: " + trackLengthFrames
-                                + ", delayBuffer.length: " + delayBuffer.length
-                                + ", BootTimeUs: " + (bootTimeNs / 1000L)
-                                + ", MonotonicTimeUs: " + (monotonicTimeNs / 1000L)
-                                + ", Timestamp TimeUs: " + timestamp.nanoTime + "\n");
+                            //Log.d("Metronome", "\nStart time:" + startTimeUs 
+                            //    + ", Correction:" + correctionUs
+                            //    + ", Timestamp Success: " + timestampSuccess
+                            //    + ", CurrentFrames: " + currentFrames 
+                            //    + ", currentTimeUs:" + currentTimeUs 
+                            //    + ", Prerun Frames: " + PRERUN_FRAMES
+                            //    + ", Total Prerun Time: " + ((nextBarFrames - delayBuffer.length) * 1000000 / SAMPLE_RATE)
+                            //    + ", Wait Frames Pre: " + waitFramePre
+                            //    + ", Wait Frames:" + waitFrames
+                            //    + ", Time per bar:" + timePerBarUs
+                            //    + ", NextBarFrames: " + nextBarFrames 
+                            //    + ", StartBarFrames: " + startBarFrames 
+                            //    + ", TrackLength Frames: " + trackLengthFrames
+                            //    + ", delayBuffer.length: " + delayBuffer.length
+                            //    + ", BootTimeUs: " + (bootTimeNs / 1000L)
+                            //    + ", MonotonicTimeUs: " + (monotonicTimeNs / 1000L)
+                            //    + ", Timestamp TimeUs: " + timestamp.nanoTime + "\n");
                         }
 
                     } else if (!correctionRequired) {
@@ -333,15 +328,15 @@ public class Metronome {
                             //    startBarFrames -= errorFrames;
                             //}
 
-                            Log.d("Metronome", "Start time: " + startTimeUs 
-                                + ", Correction: " + correctionUs 
-                                + ", Timestamp Success: " + timestampSuccess
-                                + ", Current time: " + timeNowUs
-                                + ", Current frames: " + (currentFrames - startBarFrames)
-                                + ", Expected frames: " + expectedFrames
-                                + ", Error Frames: " + errorFrames
-                                + ", Correction Frames: " + errorCorrectionFrames
-                                + ", Bar: " + targetBars);
+                            //Log.d("Metronome", "Start time: " + startTimeUs 
+                            //    + ", Correction: " + correctionUs 
+                            //    + ", Timestamp Success: " + timestampSuccess
+                            //    + ", Current time: " + timeNowUs
+                            //    + ", Current frames: " + (currentFrames - startBarFrames)
+                            //    + ", Expected frames: " + expectedFrames
+                            //    + ", Error Frames: " + errorFrames
+                            //    + ", Correction Frames: " + errorCorrectionFrames
+                            //    + ", Bar: " + targetBars);
                         }
 
                         if (errorCorrectionFrames != 0) {
