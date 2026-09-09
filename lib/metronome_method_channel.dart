@@ -46,6 +46,7 @@ class MethodChannelMetronome extends MetronomePlatform {
     int timeSignature = 4,
     int sampleRate = 44100,
     bool manageAudioSession = true,
+    String countInPath = '',
   }) async {
     if (mainPath == '') {
       throw Exception('Main path cannot be empty');
@@ -67,10 +68,15 @@ class MethodChannelMetronome extends MetronomePlatform {
     if (accentedPath != '') {
       accentedFileBytes = await loadFileBytes(accentedPath);
     }
+    Uint8List countInFileBytes = Uint8List.fromList([]);
+    if (countInPath != '') {
+      countInFileBytes = await loadFileBytes(countInPath);
+    }
     try {
       await methodChannel.invokeMethod<void>('init', {
         'mainFileBytes': mainFileBytes,
         'accentedFileBytes': accentedFileBytes,
+        'countInFileBytes': countInFileBytes,
         'bpm': bpm,
         'volume': volume / 100.0,
         'enableTickCallback': enableTickCallback,
@@ -246,22 +252,30 @@ class MethodChannelMetronome extends MetronomePlatform {
   Future<void> setAudioFile({
     String mainPath = '',
     String accentedPath = '',
+    String countInPath = '',
   }) async {
     Uint8List mainFileBytes = Uint8List.fromList([]);
     Uint8List accentedFileBytes = Uint8List.fromList([]);
+    Uint8List countInFileBytes = Uint8List.fromList([]);
     if (mainPath != '') {
       mainFileBytes = await loadFileBytes(mainPath);
     }
     if (accentedPath != '') {
       accentedFileBytes = await loadFileBytes(accentedPath);
     }
-    if (mainFileBytes.isEmpty && accentedFileBytes.isEmpty) {
+    if (countInPath != '') {
+      countInFileBytes = await loadFileBytes(countInPath);
+    }
+    if (mainFileBytes.isEmpty &&
+        accentedFileBytes.isEmpty &&
+        countInFileBytes.isEmpty) {
       return;
     }
     try {
       await methodChannel.invokeMethod<void>('setAudioFile', {
         'mainFileBytes': mainFileBytes,
         'accentedFileBytes': accentedFileBytes,
+        'countInFileBytes': countInFileBytes,
       });
     } catch (e) {
       if (kDebugMode) {

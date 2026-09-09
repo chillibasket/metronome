@@ -50,6 +50,8 @@ class MetronomeWeb extends MetronomePlatform {
     int timeSignature = 4,
     int sampleRate = 44100,
     bool manageAudioSession = true,
+    // Count-in is Android-only; accepted and ignored here.
+    String countInPath = '',
   }) async {
     _sampleRate = sampleRate;
     _audioContext = web.AudioContext(
@@ -156,6 +158,7 @@ class MetronomeWeb extends MetronomePlatform {
   Future<void> setAudioFile({
     String mainPath = '',
     String accentedPath = '',
+    String countInPath = '',
   }) async {
     if (mainPath != '') {
       _mainSoundBufferTemp = await _bytesToAudioBuffer(mainPath);

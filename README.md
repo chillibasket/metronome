@@ -39,6 +39,8 @@ metronome.init(
     sampleRate: 44100,
     // iOS only. Keep true unless the host app manages AVAudioSession.
     manageAudioSession: true,
+    // Android only. Tone for count-in clicks; defaults to the main sound.
+    countInPath: 'assets/audio/sticks44_wav.wav',
 );
 ```
 
@@ -78,6 +80,9 @@ await metronome.play(
   countInBeats: 4,            // 4 clicks BEFORE the downbeat
 );
 ```
+
+Every click in the count-in uses the same tone - the one from `countInPath`, or the main
+sound if none was given - so the first accent a player hears is the downbeat itself.
 
 The count-in is scheduled *backwards* from `startTimeUs`, so extend your own lead by
 `countInBeats * 60000000 ~/ bpm` microseconds. It needs a scheduled start, is ignored while
@@ -153,12 +158,14 @@ metronome.isInitialized;
 
 ### setAudioFile
 
-main, accent can be set at the same time or individually
+main, accent and count-in can be set at the same time or individually. An omitted
+path leaves that tone as it is.
 
 ```dart
 metronome.setAudioFile(
     mainPath:'assets/audio/snare.wav',
-    accentedPath:'assets/audio/claves.wav'
+    accentedPath:'assets/audio/claves.wav',
+    countInPath:'assets/audio/sticks.wav'
 );
 metronome.setAudioFile(
     mainPath:'assets/audio/snare.wav',

@@ -26,6 +26,9 @@ public class MetronomePlugin implements FlutterPlugin, MethodCallHandler {
   // private final String TAG = "metronome";
   /// Metronome
   private Metronome metronome = null;
+  /// Whether init() asked for tick events. onListen can arrive before or after init,
+  /// so both wire the sink, and both have to honour this opt-out.
+  private boolean tickCallbackEnabled = false;
 
   @Override
   public void onAttachedToEngine(@NonNull FlutterPluginBinding flutterPluginBinding) {
@@ -40,7 +43,7 @@ public class MetronomePlugin implements FlutterPlugin, MethodCallHandler {
         eventTickSink = events;
         // onListen is delivered asynchronously, so init() can reach us first. Wiring
         // here as well as in metronomeInit() covers either arrival order.
-        if (metronome != null) {
+        if (metronome != null && tickCallbackEnabled) {
           metronome.enableTickCallback(events);
         }
       }
@@ -48,6 +51,10 @@ public class MetronomePlugin implements FlutterPlugin, MethodCallHandler {
       @Override
       public void onCancel(Object args) {
         eventTickSink = null;
+        // Otherwise the engine keeps publishing to a cancelled sink.
+        if (metronome != null) {
+          metronome.enableTickCallback(null);
+        }
       }
     });
     //
@@ -65,15 +72,25 @@ public class MetronomePlugin implements FlutterPlugin, MethodCallHandler {
       @Override
       public void onCancel(Object args) {
         eventBarSink = null;
+        if (metronome != null) {
+          metronome.enableBarCallback(null);
+        }
       }
     });
   }
 
   @Override
   public void onMethodCall(@NonNull MethodCall call, @NonNull Result result) {
+    // Every branch below must reply exactly once: a MethodChannel handler that returns
+    // without touching Result leaves the Dart Future pending forever.
+    if (metronome == null && !"init".equals(call.method)) {
+      result.error("not_initialized", "init() must be called before " + call.method, null);
+      return;
+    }
     switch (call.method) {
       case "init":
         metronomeInit(call);
+        result.success(null);
         break;
       case "play":
         long startTimeUs = 0;
@@ -94,39 +111,49 @@ public class MetronomePlugin implements FlutterPlugin, MethodCallHandler {
         }
 
         metronome.play(startTimeUs, correctionUs, countInBeats);
+        result.success(null);
         break;
       case "pause":
         metronome.pause();
+        result.success(null);
         break;
       case "stop":
         metronome.stop();
+        result.success(null);
         break;
       case "getVolume":
-        result.success(metronome.audioVolume);
+        // audioVolume is a 0.0-1.0 float; the Dart API is an int 0-100 and decodes
+        // the reply as int, so a raw float arrives as a double and fails the cast.
+        result.success(Math.round(metronome.audioVolume * 100));
         break;
       case "setVolume":
         setVolume(call);
+        result.success(null);
         break;
       case "isPlaying":
         result.success(metronome.isPlaying());
         break;
       case "setBPM":
         setBPM(call);
+        result.success(null);
         break;
       case "getBPM":
         result.success(metronome.audioBpm);
         break;
       case "setTimeSignature":
         setTimeSignature(call);
+        result.success(null);
         break;
       case "setNextBarTimeSignature":
         setNextBarTimeSignature(call);
+        result.success(null);
         break;
       case "getTimeSignature":
         result.success(metronome.getTimeSignature());
         break;
       case "setAudioFile":
         setAudioFile(call);
+        result.success(null);
         break;
       case "getTimeUs":
         result.success(SystemClock.elapsedRealtimeNanos() / 1000L);
@@ -138,9 +165,14 @@ public class MetronomePlugin implements FlutterPlugin, MethodCallHandler {
           correctionUs = correctionUsNum != null ? correctionUsNum.longValue() : 0L;
         }
         metronome.setCorrectionUs(correctionUs);
+        result.success(null);
         break;
       case "destroy":
         metronome.destroy();
+        // Leave nothing reachable that points at a released AudioTrack.
+        metronome = null;
+        tickCallbackEnabled = false;
+        result.success(null);
         break;
       default:
         result.notImplemented();
@@ -153,9 +185,25 @@ public class MetronomePlugin implements FlutterPlugin, MethodCallHandler {
     channel.setMethodCallHandler(null);
     eventTick.setStreamHandler(null);
     eventBar.setStreamHandler(null);
+    eventTickSink = null;
+    eventBarSink = null;
+    // The plugin instance outlives the Dart isolate, so without this every engine
+    // teardown leaks an AudioTrack and its writer thread.
+    if (metronome != null) {
+      metronome.destroy();
+      metronome = null;
+    }
+    tickCallbackEnabled = false;
   }
 
   private void metronomeInit(@NonNull MethodCall call) {
+    // init() can be called again on the same plugin instance - a hot restart does
+    // exactly that - so retire the previous engine rather than leaking it.
+    if (metronome != null) {
+      metronome.destroy();
+      metronome = null;
+    }
+
     byte[] mainFileBytes = call.argument("mainFileBytes");
     if (mainFileBytes == null) {
       mainFileBytes = new byte[0];
@@ -163,6 +211,10 @@ public class MetronomePlugin implements FlutterPlugin, MethodCallHandler {
     byte[] accentedFileBytes = call.argument("accentedFileBytes");
     if (accentedFileBytes == null) {
       accentedFileBytes = new byte[0];
+    }
+    byte[] countInFileBytes = call.argument("countInFileBytes");
+    if (countInFileBytes == null) {
+      countInFileBytes = new byte[0];
     }
     boolean enableTickCallback = Boolean.TRUE.equals(call.argument("enableTickCallback"));
 
@@ -178,8 +230,10 @@ public class MetronomePlugin implements FlutterPlugin, MethodCallHandler {
     Integer sampleRateValue = call.argument("sampleRate");
     int sampleRate = (sampleRateValue != null) ? sampleRateValue : 44100;
 
-    metronome = new Metronome(mainFileBytes, accentedFileBytes, bpm, timeSignatureValue, volume, sampleRate);
+    metronome = new Metronome(mainFileBytes, accentedFileBytes, countInFileBytes, bpm, timeSignatureValue, volume,
+        sampleRate);
 
+    tickCallbackEnabled = enableTickCallback;
     if (enableTickCallback && eventTickSink != null) {
       metronome.enableTickCallback(eventTickSink);
     }
@@ -229,6 +283,7 @@ public class MetronomePlugin implements FlutterPlugin, MethodCallHandler {
     if (metronome != null) {
       byte[] mainFileBytes = call.argument("mainFileBytes");
       byte[] accentedFileBytes = call.argument("accentedFileBytes");
+      byte[] countInFileBytes = call.argument("countInFileBytes");
 
       if (mainFileBytes == null) {
         mainFileBytes = new byte[0];
@@ -236,7 +291,10 @@ public class MetronomePlugin implements FlutterPlugin, MethodCallHandler {
       if (accentedFileBytes == null) {
         accentedFileBytes = new byte[0];
       }
-      metronome.setAudioFile(mainFileBytes, accentedFileBytes);
+      if (countInFileBytes == null) {
+        countInFileBytes = new byte[0];
+      }
+      metronome.setAudioFile(mainFileBytes, accentedFileBytes, countInFileBytes);
     }
   }
 }

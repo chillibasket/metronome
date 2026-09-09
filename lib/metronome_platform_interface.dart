@@ -41,6 +41,7 @@ abstract class MetronomePlatform extends PlatformInterface {
     int timeSignature = 4,
     int sampleRate = 44100,
     bool manageAudioSession = true,
+    String countInPath = '',
   }) {
     throw UnimplementedError('init() has not been implemented.');
   }
@@ -76,6 +77,7 @@ abstract class MetronomePlatform extends PlatformInterface {
   Future<void> setAudioFile({
     String mainPath = '',
     String accentedPath = '',
+    String countInPath = '',
   }) {
     throw UnimplementedError('setAudioFile() has not been implemented.');
   }

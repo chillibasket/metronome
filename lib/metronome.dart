@@ -43,6 +43,8 @@ class Metronome {
   /// @param timeSignature: the timeSignature of the metronome, default `4`
   /// @param sampleRate: the sampleRate of the metronome, default `44100`
   /// @param manageAudioSession: whether the plugin configures and activates AVAudioSession on iOS, default `true`.
+  /// @param countInPath: the path of the tone used for count-in clicks, default ''
+  ///   (falls back to the main sound). Every click in a count-in uses this one tone.
   /// Set it to `false` when the host application manages the shared audio session. Ignored on other platforms.
   /// ```
   Future<void> init(
@@ -54,6 +56,7 @@ class Metronome {
     int timeSignature = 4,
     int sampleRate = 44100,
     bool manageAudioSession = true,
+    String countInPath = '',
   }) async {
     try {
       MetronomePlatform.instance.init(
@@ -65,6 +68,7 @@ class Metronome {
         timeSignature: timeSignature,
         sampleRate: sampleRate,
         manageAudioSession: manageAudioSession,
+        countInPath: countInPath,
       );
       _initialized = true;
       return;
@@ -126,10 +130,19 @@ class Metronome {
   }
 
   ///set the audio file of the metronome
-  Future<void> setAudioFile(
-      {String mainPath = '', String accentedPath = ''}) async {
-    return MetronomePlatform.instance
-        .setAudioFile(mainPath: mainPath, accentedPath: accentedPath);
+  ///
+  /// [countInPath] sets the tone used for count-in clicks (Android only). Pass ''
+  /// to leave whichever tone is already configured untouched.
+  Future<void> setAudioFile({
+    String mainPath = '',
+    String accentedPath = '',
+    String countInPath = '',
+  }) async {
+    return MetronomePlatform.instance.setAudioFile(
+      mainPath: mainPath,
+      accentedPath: accentedPath,
+      countInPath: countInPath,
+    );
   }
 
   ///set the bpm of the metronome

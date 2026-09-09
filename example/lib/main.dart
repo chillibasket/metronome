@@ -36,6 +36,7 @@ class _MyAppState extends State<MyApp> {
   ];
   String mainFileName = 'claves';
   String accentedFileName = 'woodblock_high';
+  String countInFileName = 'sticks';
   int currentTick = 0;
   @override
   void initState() {
@@ -48,6 +49,7 @@ class _MyAppState extends State<MyApp> {
       enableTickCallback: true,
       timeSignature: timeSignature,
       sampleRate: 44100,
+      countInPath: 'assets/audio/${countInFileName}44_wav.wav',
     );
     print("init:${_metronomePlugin.isInitialized}");
     _metronomePlugin.tickStream.listen(
@@ -224,6 +226,15 @@ class _MyAppState extends State<MyApp> {
                 runSpacing: 10,
                 children: wavs.map((wav) => _buildAccentedButton(wav)).toList(),
               ),
+              const Text(
+                'Count-in file:',
+                style: TextStyle(fontSize: 20),
+              ),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: wavs.map((wav) => _buildCountInButton(wav)).toList(),
+              ),
             ],
           ),
         ),
@@ -310,6 +321,21 @@ class _MyAppState extends State<MyApp> {
         currentTick = 0;
         _metronomePlugin.setAudioFile(
             mainPath: 'assets/audio/${name}44_wav.wav');
+        setState(() {});
+      },
+    );
+  }
+
+  Widget _buildCountInButton(String name) {
+    return ElevatedButton(
+      child: Text(
+        name,
+        style: TextStyle(color: countInFileName == name ? Colors.red : null),
+      ),
+      onPressed: () {
+        countInFileName = name;
+        _metronomePlugin.setAudioFile(
+            countInPath: 'assets/audio/${name}44_wav.wav');
         setState(() {});
       },
     );

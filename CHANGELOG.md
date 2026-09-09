@@ -16,6 +16,9 @@ unaffected.
 * Count-in: `play(countInBeats: n)` sounds `n` clicks *before* `startTimeUs`, which keeps
   meaning "the instant beat 1 of bar 1 sounds". `tickStream` emits `-n … -1` during the
   count-in and `0` on the downbeat. Capped at 16; ignored without a scheduled start.
+  Every count-in click uses one tone, so the first accent is the downbeat itself.
+* `countInPath` on `init` and `setAudioFile` selects the count-in tone. Defaults to the
+  main sound, and keeps following it if never set.
 * `setNextBarTimeSignature()` changes the meter at the next bar boundary without re-phasing
   the click, for mid-song meter changes.
 * New `barStream` reports the beat count of each bar as it starts.
@@ -33,6 +36,31 @@ unaffected.
   to an immediate start.
 * The tick stream no longer stalls for up to a bar after a time-signature change, and the
   end-of-bar test now uses the meter of the bar that is actually sounding.
+* The click ran at a slightly wrong tempo. `framesPerBeat` was an integer-truncated
+  `SAMPLE_RATE * 60 / bpm`, so the real tempo was whatever that whole number of frames
+  produced — at 130 BPM / 44.1 kHz, 130.022 BPM, drifting ~1.5 s per 20000 bars against
+  the wall clock. Worse, the truncation differs by sample rate, so a 44.1 kHz device and
+  a 48 kHz device ran at measurably different tempos and separated steadily (~125 ms
+  over the same span) with nothing to pull them back. Bars are now rounded as a whole and
+  the drift correction snaps to the exact rational grid, which holds both errors under
+  0.03 ms indefinitely. Beat placement within a bar also improved from up to 3.7 frames
+  off to under 0.7.
+* `init`, `play`, `pause`, `stop`, `setVolume`, `setBPM`, `setTimeSignature`,
+  `setAudioFile`, `setCorrectionUs` and `destroy` now reply on the method channel.
+  Previously they returned without touching the result, so `await metronome.play()` and
+  the others never completed.
+* `getVolume()` returned 0 rather than the real volume: the native side replied with a
+  0.0-1.0 float where Dart decodes an int 0-100. It now replies with an int percentage.
+* `pause()` followed by `play()` could leave two writer threads running against one
+  `AudioTrack`, both advancing the bar counter. `pause()` clears the playing state while
+  the writer is still blocked inside `write()`, so the next `play()` saw an idle track and
+  started a second writer. Writers are now retired deterministically.
+* Cancelling `tickStream` left the engine publishing to a dead sink; the sinks are now
+  cleared on cancel and null-checked in the audio callbacks.
+* `destroy()` left a released `AudioTrack` reachable, so a later call could use it after
+  free. Calling a method before `init` threw `NullPointerException` instead of reporting
+  an error. Re-running `init` (as a hot restart does) and detaching the Flutter engine
+  both leaked an `AudioTrack` and its writer thread.
 
 ## 2.0.13
 

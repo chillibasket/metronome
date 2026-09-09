@@ -25,10 +25,17 @@ public class Metronome {
     /// abandoned in favour of an immediate one.
     private static final int MAX_TIMESTAMP_FAILURES = 50;
 
+    /// Cap on how long a caller may be blocked waiting for the writer to exit. The
+    /// writer normally leaves within a buffer of being unblocked; this is a safety net.
+    private static final int WRITER_JOIN_TIMEOUT_MS = 500;
+
     private final Object mLock = new Object();
     private final AudioTrack audioTrack;
     private volatile short[] mainSound;
     private volatile short[] accentedSound;
+    /// Tone for count-in clicks, or null to follow mainSound. Every click in a count-in
+    /// uses this one tone - the count-in is not accented, whatever its length.
+    private volatile short[] countInSoundOverride;
     private short[] audioBuffer;
     private final int SAMPLE_RATE;
     /// getMinBufferSize() returns BYTES; this is used as a short[] length, so the
@@ -51,15 +58,26 @@ public class Metronome {
     private volatile int barBeats = 0;
 
     private volatile boolean correctionRequired = false;
-    private EventChannel.EventSink eventTickSink;
-    private EventChannel.EventSink eventBarSink;
+    /// Cleared to null when the Dart stream is cancelled, so the notification callbacks
+    /// must null-check a local copy rather than dereference the field.
+    private volatile EventChannel.EventSink eventTickSink;
+    private volatile EventChannel.EventSink eventBarSink;
     private volatile int currentTick = 0;
     private int startBarFrames = 0;
     private int nextBarFrames = 0;
 
+    /// The writer thread, while one may still be alive. Only ever one at a time:
+    /// pause() clears PLAYSTATE_PLAYING while the writer is still blocked inside
+    /// write(), so without this a following play() would start a second writer against
+    /// the same AudioTrack.
+    private volatile Thread writerThread = null;
+    /// Cleared to ask the writer to leave its loop.
+    private volatile boolean writerRunning = false;
+    /// Set once the AudioTrack is released; every entry point becomes a no-op after.
+    private volatile boolean released = false;
+
     // Synchronization primitives
     private final int MAX_DRIFT_CORRECTION;
-    private long timePerBarUs = 0;
     private volatile int framesPerBeat = 0;
     private volatile long startTimeUs = 0;
     private volatile long correctionUs = 0;
@@ -71,9 +89,14 @@ public class Metronome {
     /// count-in start, 0 for an ordinary bar boundary.
     private volatile int pendingMarkerTick = 0;
 
-    @SuppressWarnings("deprecation")
     public Metronome(byte[] mainFileBytes, byte[] accentedFileBytes, int bpm, int timeSignature, float volume,
             int sampleRate) {
+        this(mainFileBytes, accentedFileBytes, new byte[0], bpm, timeSignature, volume, sampleRate);
+    }
+
+    @SuppressWarnings("deprecation")
+    public Metronome(byte[] mainFileBytes, byte[] accentedFileBytes, byte[] countInFileBytes, int bpm,
+            int timeSignature, float volume, int sampleRate) {
         SAMPLE_RATE = sampleRate;
         MAX_DRIFT_CORRECTION = sampleRate / 20;
         audioBpm = bpm;
@@ -85,6 +108,11 @@ public class Metronome {
         } else {
             accentedSound = byteArrayToShortArray(accentedFileBytes);
         }
+        // Left null when unsupplied so countInSound() falls back to whatever mainSound
+        // currently is, including after a later setAudioFile().
+        countInSoundOverride = (countInFileBytes.length == 0)
+                ? null
+                : byteArrayToShortArray(countInFileBytes);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             AudioFormat audioFormat = new AudioFormat.Builder()
                     .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
@@ -129,6 +157,9 @@ public class Metronome {
     /// @param countInBeats Clicks to sound BEFORE startTimeUs. Needs a scheduled start
     ///   to count back from; ignored while already playing.
     public void play(long startTimeUs, long correctionUs, int countInBeats) {
+        if (released) {
+            return;
+        }
         if (!isPlaying()) {
             this.startTimeUs = startTimeUs;
             this.correctionUs = correctionUs;
@@ -166,12 +197,43 @@ public class Metronome {
     }
 
     public void pause() {
+        if (released) {
+            return;
+        }
         audioTrack.pause();
+        retireWriter();
+    }
+
+    /// Stops the writer thread and waits for it to leave.
+    ///
+    /// A paused track stops draining, so a writer blocked in a blocking write() would
+    /// never return on its own; flush() is what releases it. mLock is deliberately not
+    /// taken here - the writer holds it for the whole loop body, write() included, so
+    /// acquiring it from the platform thread would deadlock.
+    private void retireWriter() {
+        writerRunning = false;
+        Thread previous = writerThread;
+        writerThread = null;
+        if (previous == null || previous == Thread.currentThread()) {
+            return;
+        }
+        if (previous.isAlive()) {
+            audioTrack.flush();
+        }
+        try {
+            previous.join(WRITER_JOIN_TIMEOUT_MS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     public void stop() {
+        if (released) {
+            return;
+        }
         audioTrack.flush();
         audioTrack.stop();
+        retireWriter();
         // A cancelled count-in, or a meter queued and never consumed, must not leak
         // into the next play().
         countInBeats = 0;
@@ -225,12 +287,21 @@ public class Metronome {
     }
 
     public void setAudioFile(byte[] mainFileBytes, byte[] accentedFileBytes) {
+        setAudioFile(mainFileBytes, accentedFileBytes, new byte[0]);
+    }
+
+    public void setAudioFile(byte[] mainFileBytes, byte[] accentedFileBytes, byte[] countInFileBytes) {
         if (mainFileBytes.length > 0) {
             mainSound = byteArrayToShortArray(mainFileBytes);
         }
         if (accentedFileBytes.length > 0) {
             accentedSound = byteArrayToShortArray(accentedFileBytes);
         }
+        if (countInFileBytes.length > 0) {
+            countInSoundOverride = byteArrayToShortArray(countInFileBytes);
+        }
+        // The count-in tone is not part of the bar buffer, so changing only that needs
+        // no regenerate.
         if (mainFileBytes.length > 0 || accentedFileBytes.length > 0) {
             pendingRegenerate = true;
         }
@@ -267,23 +338,41 @@ public class Metronome {
         return shortArray;
     }
 
-    private short[] generateBuffer() {
-        framesPerBeat = (int) (SAMPLE_RATE * 60 / audioBpm);
-        timePerBarUs = 60000000L * audioTimeSignature / audioBpm;
+    /// Beats in a bar. Fewer than 2 means a one-beat bar with no accent.
+    private int beatsPerBar() {
+        return Math.max(1, audioTimeSignature);
+    }
 
-        short[] bufferBar;
-        if (audioTimeSignature < 2) {
-            bufferBar = new short[framesPerBeat + MAX_DRIFT_CORRECTION];
-            int soundLength = Math.min(framesPerBeat, mainSound.length);
-            System.arraycopy(mainSound, 0, bufferBar, 0, soundLength);
-        } else {
-            int bufferSize = (framesPerBeat * audioTimeSignature) + MAX_DRIFT_CORRECTION;
-            bufferBar = new short[bufferSize];
-            for (int i = 0; i < audioTimeSignature; i++) {
-                short[] sound = (i == 0) ? accentedSound : mainSound;
-                int soundLength = Math.min(framesPerBeat, sound.length);
-                System.arraycopy(sound, 0, bufferBar, i * framesPerBeat, soundLength);
-            }
+    /// Exact frame offset of bar `bars` from the phase reference, rounded once from the
+    /// true rational bar length instead of accumulating a per-bar rounding error.
+    ///
+    /// This is the drift correction target. Using the whole-frame bar length instead
+    /// would lock the click to SAMPLE_RATE * 60 * beats / barFrames rather than to the
+    /// requested BPM - a small error, but a systematic one that differs between sample
+    /// rates, so two synced devices at 44.1 and 48 kHz would separate steadily.
+    private long idealBarOffsetFrames(long bars) {
+        long beats = beatsPerBar();
+        return (bars * 60L * beats * SAMPLE_RATE + (audioBpm / 2)) / audioBpm;
+    }
+
+    private short[] generateBuffer() {
+        final int beats = beatsPerBar();
+        // Round the bar as a whole rather than truncating every beat: truncation lost up
+        // to a frame per beat, which is what made the real tempo sample-rate dependent.
+        // The clamp only bites on nonsense settings, where it keeps the allocation below
+        // from overflowing into a negative array size.
+        final int barFrames = (int) Math.min(idealBarOffsetFrames(1), 60L * SAMPLE_RATE);
+        framesPerBeat = (barFrames + (beats / 2)) / beats;
+
+        short[] bufferBar = new short[barFrames + MAX_DRIFT_CORRECTION];
+        for (int i = 0; i < beats; i++) {
+            // Spread the rounding remainder over the bar so no click sits more than a
+            // frame from its ideal position.
+            int offset = (int) (((long) i * barFrames + (beats / 2)) / beats);
+            int nextOffset = (int) (((long) (i + 1) * barFrames + (beats / 2)) / beats);
+            short[] sound = (i == 0 && audioTimeSignature >= 2) ? accentedSound : mainSound;
+            int soundLength = Math.min(nextOffset - offset, sound.length);
+            System.arraycopy(sound, 0, bufferBar, offset, soundLength);
         }
 
         return bufferBar;
@@ -292,25 +381,24 @@ public class Metronome {
     /// Writes count-in clicks into the tail of the pre-start delay buffer.
     ///
     /// Aligned to the end, so the last click falls exactly one beat before the
-    /// scheduled downbeat. Each click takes the sound of the bar position it stands
-    /// in, counting back from the downbeat: two beats of 4/4 sound as beats 3 and 4,
-    /// leaving the accent for the downbeat, while a whole bar of count-in accents its
-    /// own first click.
+    /// scheduled downbeat. Every click uses the same tone regardless of where it sits
+    /// relative to the bar, which leaves the first accent for the downbeat itself and
+    /// makes the count-in read as a lead-in rather than as a bar of music.
     private void writeCountIn(short[] delayBuffer, int beats) {
         final int offset = delayBuffer.length - (beats * framesPerBeat);
-        final int timeSignature = audioTimeSignature;
+        final short[] sound = countInSound();
+        final int len = Math.min(framesPerBeat, sound.length);
         for (int i = 0; i < beats; i++) {
-            short[] sound = mainSound;
-            if (timeSignature >= 2) {
-                // Java % keeps the sign of the dividend, hence the ((x % n) + n) % n form.
-                int barPos = ((timeSignature - beats + i) % timeSignature + timeSignature) % timeSignature;
-                if (barPos == 0) {
-                    sound = accentedSound;
-                }
-            }
-            int len = Math.min(framesPerBeat, sound.length);
             System.arraycopy(sound, 0, delayBuffer, offset + (i * framesPerBeat), len);
         }
+    }
+
+    /// Tone every count-in click uses: the one supplied through countInPath, or the
+    /// main sound when none was. Resolved on use rather than cached so that changing
+    /// the main sound also changes an unconfigured count-in.
+    private short[] countInSound() {
+        short[] configured = countInSoundOverride;
+        return (configured != null) ? configured : mainSound;
     }
 
     /// Re-anchors the drift reference after the bar length changes, carrying over any
@@ -331,21 +419,24 @@ public class Metronome {
     }
 
     void onTick() {
-        if (eventTickSink == null)
-            return;
-
+        // Installed unconditionally: a sink can be attached or cancelled at any time,
+        // so the callbacks below read a local copy and null-check it instead.
         audioTrack.setPlaybackPositionUpdateListener(new AudioTrack.OnPlaybackPositionUpdateListener() {
             @Override
             public void onMarkerReached(AudioTrack track) {
                 // The writer set pendingBarBeats for this bar one buffer ago.
                 barBeats = pendingBarBeats;
-                if (eventBarSink != null) {
-                    eventBarSink.success(barBeats);
+                EventChannel.EventSink barSink = eventBarSink;
+                if (barSink != null) {
+                    barSink.success(barBeats);
                 }
                 track.setPositionNotificationPeriod(framesPerBeat);
                 currentTick = pendingMarkerTick;   // -countInBeats, or 0
                 pendingMarkerTick = 0;             // only the first marker carries it
-                eventTickSink.success(currentTick);
+                EventChannel.EventSink tickSink = eventTickSink;
+                if (tickSink != null) {
+                    tickSink.success(currentTick);
+                }
             }
 
             @Override
@@ -371,18 +462,31 @@ public class Metronome {
                     track.setPositionNotificationPeriod(0);
                 }
 
-                eventTickSink.success(currentTick);
+                EventChannel.EventSink tickSink = eventTickSink;
+                if (tickSink != null) {
+                    tickSink.success(currentTick);
+                }
             }
         });
     }
 
     private void startMetronome() {
-        new Thread(() -> {
+        // Never run two writers against one AudioTrack. pause() and stop() already
+        // retire theirs; this covers any path that did not.
+        retireWriter();
+        writerRunning = true;
+
+        Thread writer = new Thread(() -> {
 
             int trackLengthFrames = 0;
             int delayFrames = 0;
             boolean started = false;
             int timestampFailures = 0;
+            // Tempo basis the current phase reference was established under. The exact
+            // bar grid counts bars from that reference, so it is only valid while both
+            // of these hold.
+            int activeBpm = 0;
+            int activeBeats = 0;
             correctionRequired = false;
             AudioTimestamp timestamp = new AudioTimestamp();
 
@@ -397,14 +501,15 @@ public class Metronome {
             audioTrack.write(silenceBuffer, 0, silenceBuffer.length);
             audioTrack.play();
 
-            while (isPlaying()) {
+            while (writerRunning && isPlaying()) {
                 synchronized (mLock) {
-                    if (!isPlaying()) {
+                    if (!writerRunning || !isPlaying()) {
                         return;
                     }
 
                     final int prevLength = trackLengthFrames;
                     boolean regenerated = false;
+                    boolean tempoChanged = false;
 
                     // pendingTimeSignature is part of the entry condition, not just a
                     // payload: otherwise an unrelated setBPM can consume pendingRegenerate
@@ -416,9 +521,12 @@ public class Metronome {
                         }
                         audioBuffer = generateBuffer();
                         trackLengthFrames = audioBuffer.length - MAX_DRIFT_CORRECTION;
-                        pendingBarBeats = (audioTimeSignature < 2) ? 1 : audioTimeSignature;
+                        pendingBarBeats = beatsPerBar();
                         pendingRegenerate = false;
                         regenerated = true;
+                        tempoChanged = (audioBpm != activeBpm) || (pendingBarBeats != activeBeats);
+                        activeBpm = audioBpm;
+                        activeBeats = pendingBarBeats;
                     }
 
                     if (pendingResync) {
@@ -443,10 +551,13 @@ public class Metronome {
                         continue;
                     }
 
-                    // Only rebase when the bar length actually changed. Running this on
-                    // every pass would force runFrames to 0 each bar, zeroing the drift
-                    // correction and making setCorrectionUs a silent no-op.
-                    if (regenerated && !correctionRequired && trackLengthFrames != prevLength) {
+                    // Only rebase when the tempo basis changed. Running this on every
+                    // pass would force runFrames to 0 each bar, zeroing the drift
+                    // correction and making setCorrectionUs a silent no-op. The test is
+                    // on BPM and beats rather than on the bar length, because that is
+                    // what idealBarOffsetFrames() counts from - a setAudioFile-only
+                    // regenerate must leave the grid alone.
+                    if (regenerated && !correctionRequired && tempoChanged) {
                         rebasePhase(prevLength);
                     }
 
@@ -521,8 +632,13 @@ public class Metronome {
 
                     } else {
                         long runFrames = (nextBarFrames - startBarFrames) - (correctionUs * SAMPLE_RATE / 1000000L);
-                        long targetBars = Math.round(runFrames / (float)(trackLengthFrames));
-                        long errorCorrectionFrames = (targetBars * trackLengthFrames) - runFrames;
+                        // Which bar boundary we are at, measured against the true bar
+                        // duration rather than its whole-frame approximation.
+                        long targetBars = Math.round(
+                            (double) runFrames * audioBpm / (60.0 * beatsPerBar() * SAMPLE_RATE));
+                        // Snap to the exact grid, so the sub-frame remainder is paid off
+                        // instead of accumulating into a sample-rate dependent tempo error.
+                        long errorCorrectionFrames = idealBarOffsetFrames(targetBars) - runFrames;
 
                         if (errorCorrectionFrames != 0) {
                             delayFrames = (int)(errorCorrectionFrames);
@@ -542,11 +658,18 @@ public class Metronome {
                     }
                 }
             }
-        }).start();
+        });
+        writerThread = writer;
+        writer.start();
     }
 
     public void destroy() {
+        if (released) {
+            return;
+        }
+        // stop() retires the writer, so nothing can touch the track after release().
         stop();
+        released = true;
         audioTrack.release();
     }
 }
