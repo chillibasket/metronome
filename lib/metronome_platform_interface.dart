@@ -40,6 +40,7 @@ abstract class MetronomePlatform extends PlatformInterface {
     bool enableTickCallback = false,
     int timeSignature = 4,
     int sampleRate = 44100,
+    bool manageAudioSession = true,
   }) {
     throw UnimplementedError('init() has not been implemented.');
   }
@@ -110,9 +111,5 @@ abstract class MetronomePlatform extends PlatformInterface {
 
   Future<void> destroy() {
     throw UnimplementedError('destroy() has not been implemented.');
-  }
-
-  Stream<dynamic> onListenTick(onEvent) {
-    throw UnimplementedError('onListenTick() has not been implemented.');
   }
 }

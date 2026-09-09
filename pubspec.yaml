@@ -45,6 +45,9 @@ flutter:
       android:
         package: com.sumsg.metronome
         pluginClass: MetronomePlugin
+      ohos:
+        package: com.sumsg.metronome
+        pluginClass: MetronomePlugin
       ios:
         pluginClass: MetronomePlugin
         sharedDarwinSource: true

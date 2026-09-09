@@ -15,6 +15,7 @@ class Metronome {
 
     private var sampleRate: Int = 44100
     private var timer: DispatchSourceTimer?
+    private let timerQueue = DispatchQueue(label: "com.metronome.beat-timer", qos: .background)
     private var startTime: AVAudioTime?
     
     // Synchronization primitives
@@ -26,7 +27,15 @@ class Metronome {
     private var actualCorrectionNs: Int64 = 0
     
     /// Initialize the metronome with the main and accented audio files.
-    init(mainFileBytes: Data, accentedFileBytes: Data, bpm: Int, timeSignature: Int = 0, volume: Float, sampleRate: Int) {
+    init(
+        mainFileBytes: Data,
+        accentedFileBytes: Data,
+        bpm: Int,
+        timeSignature: Int = 0,
+        volume: Float,
+        sampleRate: Int,
+        manageAudioSession: Bool = true
+    ) {
         self.sampleRate = sampleRate
         self.MAX_DRIFT_CORRECTION = sampleRate / 20
         audioTimeSignature = timeSignature
@@ -40,17 +49,19 @@ class Metronome {
             audioFileAccented = try! AVAudioFile(fromData: accentedFileBytes)
         }
 #if os(iOS)
-        do {
-            let audioSession = AVAudioSession.sharedInstance()
-            try audioSession.setCategory(
-                .playAndRecord,
-                mode: .videoRecording,
-                options: [.allowBluetooth, .allowBluetoothA2DP, .defaultToSpeaker, .mixWithOthers]
-            )
-            
-            try audioSession.setActive(true)
-        } catch {
-            print("Failed to set audio session category: \(error)")
+        if manageAudioSession {
+            do {
+                let audioSession = AVAudioSession.sharedInstance()
+                try audioSession.setCategory(
+                    .playAndRecord,
+                    mode: .videoRecording,
+                    options: [.allowBluetooth, .allowBluetoothA2DP, .defaultToSpeaker, .mixWithOthers]
+                )
+
+                try audioSession.setActive(true)
+            } catch {
+                print("Failed to set audio session category: \(error)")
+            }
         }
 #endif
         // Initialize audio engine and player node
@@ -76,6 +87,13 @@ class Metronome {
         setupNotifications()
 #endif
     }
+    private func reconnectPlayerNode() {
+        if !audioEngine.outputConnectionPoints(for: audioPlayerNode, outputBus: 0).isEmpty {
+            audioEngine.disconnectNodeOutput(audioPlayerNode)
+        }
+        audioEngine.connect(audioPlayerNode, to: mixerNode, format: audioFileMain.processingFormat)
+    }
+
     /// Start the metronome.
     func play() {
         play(startTimeMs: 0, driftCorrectionUs: 0)
@@ -116,12 +134,13 @@ class Metronome {
     
     /// Stop the metronome.
     func stop() {
+        // Stop the beat callback before operating on the player node.
+        stopBeatTimer()
         if audioBuffer != nil {
             audioBuffer?.frameLength = 0
             self.audioPlayerNode.scheduleBuffer(audioBuffer!, at: nil, options: .interruptsAtLoop, completionHandler: nil)
         }
         audioPlayerNode.stop()
-        stopBeatTimer()
     }
     
     /// Set the BPM of the metronome.
@@ -146,18 +165,21 @@ class Metronome {
     }
     
     func setAudioFile(mainFileBytes: Data, accentedFileBytes: Data) {
+        if mainFileBytes.isEmpty && accentedFileBytes.isEmpty { return }
+
+        let wasPlaying = isPlaying
+        if wasPlaying { stop() }
+
         if !mainFileBytes.isEmpty {
             audioFileMain = try! AVAudioFile(fromData: mainFileBytes)
         }
         if !accentedFileBytes.isEmpty {
             audioFileAccented = try! AVAudioFile(fromData: accentedFileBytes)
         }
-        if !mainFileBytes.isEmpty || !accentedFileBytes.isEmpty {
-            if isPlaying {
-                pause()
-                play()
-            }
-        }
+
+        reconnectPlayerNode()
+
+        if wasPlaying { play() }
     }
     
     var getTimeSignature: Int {
@@ -203,34 +225,22 @@ class Metronome {
         }
     }
     private func handleRouteChange(_ notification: Notification) {
-        // let reasonValue = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
-        // let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue ?? 0)
-        // print("Audio route changed. Reason: \(String(describing: reason))")
         let wasPlaying = isPlaying
         if wasPlaying {
-            pause()
+            self.stop()
         }
-        
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.audioEngine.stop()
+
             do {
-                // let session = AVAudioSession.sharedInstance()
-                // let outputs = session.currentRoute.outputs
-                // print("Current audio outputs: \(outputs.map { $0.portType.rawValue })")
-                self.audioPlayerNode.stop()
-                self.audioEngine.stop()
-                self.audioEngine.reset()
-
-                do {
-                    try self.audioEngine.start()
-                } catch {
-                    print("Audio engine failed to restart: \(error.localizedDescription)")
-                }
-
-                if wasPlaying {
-                    self.play()
-                }
+                try self.audioEngine.start()
             } catch {
-                print("Failed to handle audio route change: \(error.localizedDescription)")
+                print("Audio engine failed to restart: \(error.localizedDescription)")
+            }
+
+            if wasPlaying {
+                self.play()
             }
         }
     }
@@ -296,7 +306,6 @@ class Metronome {
         }
         
         //
-        self.startTime = self.audioPlayerNode.lastRenderTime
         self.audioPlayerNode.scheduleBuffer(bufferBar, at: nil, options: .loops,completionHandler: nil)
         self.audioPlayerNode.play()
         startBeatTimer()
@@ -313,14 +322,15 @@ class Metronome {
     private func startBeatTimer() {
         if self.eventTick == nil {return}
         let beatDuration = 60.0 / Double(audioBpm)
+        let startUptime = DispatchTime.now().uptimeNanoseconds
         timer?.cancel()
-        timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .background))
+        timer = DispatchSource.makeTimerSource(queue: timerQueue)
         timer?.schedule(deadline: .now(), repeating: beatDuration, leeway: .milliseconds(10))
         timer?.setEventHandler { [weak self] in
             guard let self = self else { return }
-            guard let startTime = self.startTime,
-                  let currentTime = self.audioPlayerNode.lastRenderTime,
-                  let elapsedTime = self.getElapsedTime(from: startTime, to: currentTime) else { return }
+            // Use a monotonic clock to decouple the beat callback from the AVAudioNode lifecycle.
+            let elapsedNanoseconds = DispatchTime.now().uptimeNanoseconds - startUptime
+            let elapsedTime = Double(elapsedNanoseconds) / 1_000_000_000
 
             let currentBeat = Int(elapsedTime / beatDuration)
             let currentTick = (self.audioTimeSignature > 1) ? (currentBeat % self.audioTimeSignature) : 0
@@ -332,21 +342,18 @@ class Metronome {
 
         timer?.resume()
     }
-    
-    private func getElapsedTime(from startTime: AVAudioTime, to currentTime: AVAudioTime) -> TimeInterval? {
-//        guard let sampleRate = startTime.sampleRate as Double? else { return nil }
-        let elapsedSamples = currentTime.sampleTime - startTime.sampleTime
-        return Double(elapsedSamples) / Double(self.sampleRate)
-    }
 
     func destroy() {
-        audioPlayerNode.reset()
-        audioPlayerNode.stop()
-        audioEngine.reset()
-        audioEngine.stop()
-        audioEngine.detach(audioPlayerNode)
-        audioBuffer = nil
+        // Stop the beat callback before operating on the player node.
         stopBeatTimer()
+        audioPlayerNode.stop()
+        audioPlayerNode.reset()
+        audioEngine.stop()
+        audioEngine.reset()
+        if audioEngine.attachedNodes.contains(audioPlayerNode) {
+            audioEngine.detach(audioPlayerNode)
+        }
+        audioBuffer = nil
     }
 }
 extension AVAudioFile {

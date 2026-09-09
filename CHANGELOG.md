@@ -34,6 +34,31 @@ unaffected.
 * The tick stream no longer stalls for up to a bar after a time-signature change, and the
   end-of-bar test now uses the meter of the bar that is actually sounding.
 
+## 2.0.13
+
+* Add the `manageAudioSession` parameter to `Metronome.init`.
+* On iOS, audio session management remains enabled by default for backward compatibility. Set `manageAudioSession` to `false` when the host application configures and activates the shared `AVAudioSession`.
+
+## 2.0.12
+
+* Fix the source_files path configuration in darwin/metronome.podspec.
+
+## 2.0.11
+
+* chore(platform): upgrade iOS deployment target to 13.0
+
+## 2.0.10
+
+* chore(platform): upgrade macOS deployment target to 10.15
+
+## 2.0.9
+
+* Fix crashes in handleRouteChange during audio engine reset. [#34](https://github.com/biner88/metronome/pull/36)
+
+## 2.0.8
+
+* Fix: Metronome audio handling. [#33](https://github.com/biner88/metronome/pull/33)
+
 ## 2.0.7
 
 * Fix 1-beat offset in Android for tick callback [#28](https://github.com/biner88/metronome/pull/28)

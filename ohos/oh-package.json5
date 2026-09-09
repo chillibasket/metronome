@@ -1,0 +1,10 @@
+{
+  "name": "metronome",
+  "version": "2.0.13",
+  "description": "OpenHarmony implementation of the metronome plugin.",
+  "main": "index.ets",
+  "license": "MIT",
+  "dependencies": {
+    "@ohos/flutter_ohos": "file:libs/flutter.har"
+  }
+}
