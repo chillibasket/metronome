@@ -72,8 +72,10 @@ class MetronomeWeb extends MetronomePlatform {
 
   @override
   Future<void> play({
-    int startTimeUs = 0, 
-    int correctionUs = 0
+    int startTimeUs = 0,
+    int correctionUs = 0,
+    // Scheduled start and count-in are Android-only; accepted and ignored here.
+    int countInBeats = 0,
   }) async {
     if (_isPlaying) return;
     _startTimeUs = startTimeUs;
@@ -141,6 +143,12 @@ class MetronomeWeb extends MetronomePlatform {
     if (timeSignature != _timeSignature) {
       _timeSignature = timeSignature;
     }
+  }
+
+  @override
+  Future<void> setNextBarTimeSignature(int timeSignature) async {
+    // No bar-boundary scheduling on web; apply at the next scheduled beat.
+    await setTimeSignature(timeSignature);
   }
 
   @override

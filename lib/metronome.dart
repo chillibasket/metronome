@@ -12,6 +12,13 @@ class Metronome {
   bool get isInitialized => _initialized;
   bool _initialized = false;
 
+  /// Beat index within the current bar, 0-based.
+  ///
+  /// While a count-in requested through [play] is sounding, the values are
+  /// negative and count up to zero: a 4-beat count-in emits -4, -3, -2, -1 and
+  /// then 0 on the downbeat of bar 1. Negative values are only ever emitted when
+  /// [play] was called with `countInBeats > 0`.
+  ///
   /// ```
   /// metronome.tickStream.listen(
   ///   (int tick) {
@@ -20,6 +27,12 @@ class Metronome {
   /// );
   /// ```
   Stream<int> get tickStream => _platform.tickController.stream;
+
+  /// Beat count of the bar that has just started, emitted alongside each
+  /// downbeat. Use the latest value as the meter of the current bar rather than
+  /// assuming strict interleaving with [tickStream] - they are separate
+  /// channels. Android only; other platforms never emit.
+  Stream<int> get barStream => _platform.barController.stream;
 
   ///initialize the metronome
   /// ```
@@ -57,16 +70,28 @@ class Metronome {
     }
   }
 
-  /// Play the metronome with optional scheduled start time
-  /// @param startTimeUs Start time relative to audio reference clock in microseconds (0 = immediate start)
-  /// @param correctionUs Drift correction in microseconds for phase alignment (0 = no correction)
+  /// Play the metronome with an optional scheduled start and count-in.
+  ///
+  /// @param startTimeUs Start time of the FIRST BEAT OF BAR 1, on the audio
+  ///   reference clock, in microseconds (0 = immediate start).
+  /// @param correctionUs Drift correction in microseconds for phase alignment
+  ///   (0 = no correction).
+  /// @param countInBeats Number of count-in clicks to sound BEFORE
+  ///   [startTimeUs]. 0 (default) disables the count-in and reproduces the
+  ///   previous behaviour exactly. Because the count-in is scheduled backwards
+  ///   from [startTimeUs], the caller must extend its own lead by
+  ///   `countInBeats * 60000000 ~/ bpm` microseconds. Requires a non-zero
+  ///   [startTimeUs]; ignored otherwise, ignored if already playing, and capped
+  ///   at 16. While it sounds, [tickStream] emits negative values.
   Future<void> play({
     int startTimeUs = 0,
     int correctionUs = 0,
+    int countInBeats = 0,
   }) async {
     return MetronomePlatform.instance.play(
       startTimeUs: startTimeUs,
       correctionUs: correctionUs,
+      countInBeats: countInBeats,
     );
   }
 
@@ -117,6 +142,17 @@ class Metronome {
   ///set the time signature of the metronome
   Future<void> setTimeSignature(int timeSignature) async {
     return MetronomePlatform.instance.setTimeSignature(timeSignature);
+  }
+
+  /// Queue a time signature to take effect at the next bar boundary, leaving the
+  /// phase untouched. Intended to be driven once per bar from a song meter map.
+  ///
+  /// The native writer runs one audio buffer ahead of the speaker, so calling
+  /// this on tick 0 of a bar leaves roughly that bar to be heard in the next one.
+  /// Calling later defers the change by a bar, which [barStream] makes visible.
+  /// Android only.
+  Future<void> setNextBarTimeSignature(int timeSignature) async {
+    return MetronomePlatform.instance.setNextBarTimeSignature(timeSignature);
   }
 
   ///get the signature of the metronome

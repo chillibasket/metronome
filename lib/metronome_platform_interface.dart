@@ -28,6 +28,10 @@ abstract class MetronomePlatform extends PlatformInterface {
   final StreamController<int> tickController =
       StreamController<int>.broadcast();
 
+  /// Beat count of the bar that has just started. Android only; other platforms
+  /// never emit.
+  final StreamController<int> barController = StreamController<int>.broadcast();
+
   Future<void> init(
     String mainPath, {
     String accentedPath = '',
@@ -43,6 +47,7 @@ abstract class MetronomePlatform extends PlatformInterface {
   Future<void> play({
     int startTimeUs = 0,
     int correctionUs = 0,
+    int countInBeats = 0,
   }) {
     throw UnimplementedError('play() has not been implemented.');
   }
@@ -84,6 +89,11 @@ abstract class MetronomePlatform extends PlatformInterface {
 
   Future<void> setTimeSignature(int timeSignature) {
     throw UnimplementedError('setTimeSignature() has not been implemented.');
+  }
+
+  Future<void> setNextBarTimeSignature(int timeSignature) {
+    throw UnimplementedError(
+        'setNextBarTimeSignature() has not been implemented.');
   }
 
   Future<int?> getTimeSignature() {

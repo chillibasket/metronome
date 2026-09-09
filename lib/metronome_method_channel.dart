@@ -12,6 +12,7 @@ class MethodChannelMetronome extends MetronomePlatform {
   @visibleForTesting
   final methodChannel = const MethodChannel('metronome');
   final eventTickChannel = const EventChannel("metronome_tick");
+  final eventBarChannel = const EventChannel("metronome_bar");
 
   MethodChannelMetronome() {
     eventTickChannel.receiveBroadcastStream().listen(
@@ -22,6 +23,16 @@ class MethodChannelMetronome extends MetronomePlatform {
       },
       onError: (error) {
         // print("Tick Stream Error: $error");
+      },
+    );
+    eventBarChannel.receiveBroadcastStream().listen(
+      (event) {
+        if (event is int) {
+          barController.add(event);
+        }
+      },
+      onError: (error) {
+        // print("Bar Stream Error: $error");
       },
     );
   }
@@ -76,11 +87,13 @@ class MethodChannelMetronome extends MetronomePlatform {
   Future<void> play({
     int startTimeUs = 0,
     int correctionUs = 0,
+    int countInBeats = 0,
   }) async {
     try {
       await methodChannel.invokeMethod<void>('play', {
         'startTimeUs': startTimeUs,
         'correctionUs': correctionUs,
+        'countInBeats': countInBeats,
       });
     } catch (e) {
       if (kDebugMode) {
@@ -147,6 +160,22 @@ class MethodChannelMetronome extends MetronomePlatform {
     }
     try {
       await methodChannel.invokeMethod<void>('setTimeSignature', {
+        'timeSignature': timeSignature,
+      });
+    } catch (e) {
+      if (kDebugMode) {
+        print(e);
+      }
+    }
+  }
+
+  @override
+  Future<void> setNextBarTimeSignature(int timeSignature) async {
+    if (timeSignature < 0) {
+      throw Exception('timeSignature must be a positive integer');
+    }
+    try {
+      await methodChannel.invokeMethod<void>('setNextBarTimeSignature', {
         'timeSignature': timeSignature,
       });
     } catch (e) {

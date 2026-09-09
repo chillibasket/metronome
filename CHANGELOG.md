@@ -1,3 +1,39 @@
+## 2.1.0
+
+Android only. All additions default to the previous behaviour, so existing callers are
+unaffected.
+
+### Cross-device synchronisation (previously unreleased)
+
+* `play(startTimeUs:, correctionUs:)` schedules the first downbeat on the boot-monotonic
+  clock (`SystemClock.elapsedRealtimeNanos`), accurate to within about 5 ms.
+* `setCorrectionUs()` applies a non-accumulative phase shift while playing, slewed in at up
+  to 50 ms per bar.
+* `getTimeUs()` returns the reference clock so callers can schedule against it.
+
+### New in this release
+
+* Count-in: `play(countInBeats: n)` sounds `n` clicks *before* `startTimeUs`, which keeps
+  meaning "the instant beat 1 of bar 1 sounds". `tickStream` emits `-n … -1` during the
+  count-in and `0` on the downbeat. Capped at 16; ignored without a scheduled start.
+* `setNextBarTimeSignature()` changes the meter at the next bar boundary without re-phasing
+  the click, for mid-song meter changes.
+* New `barStream` reports the beat count of each bar as it starts.
+
+### Fixed
+
+* A mid-play `setBPM` / `setTimeSignature` / `setAudioFile` no longer re-phases the click.
+  It previously inserted up to a full bar of silence and re-anchored the grid to
+  `startTimeUs`, so moving a tempo slider during playback stumbled audibly.
+* The drift reference is re-anchored when the bar length changes, instead of leaving a
+  residual of up to half a bar to be worked off — which resolved differently on each device
+  and broke multi-device sync after a tempo or meter change.
+* A failing `AudioTrack.getTimestamp()` during a scheduled start no longer busy-spins at
+  100% CPU (which starved the track and prolonged the failure); it retries, then falls back
+  to an immediate start.
+* The tick stream no longer stalls for up to a bar after a time-signature change, and the
+  end-of-bar test now uses the meter of the bar that is actually sounding.
+
 ## 2.0.7
 
 * Fix 1-beat offset in Android for tick callback [#28](https://github.com/biner88/metronome/pull/28)

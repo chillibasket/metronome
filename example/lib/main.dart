@@ -21,6 +21,8 @@ class _MyAppState extends State<MyApp> {
   int startTimeOffsetMs = 0;
   int correctionMs = 0;
   int timeSignature = 4;
+  int countInBeats = 0;
+  int currentBarBeats = 0;
   String metronomeIcon = 'assets/metronome-left.png';
   String metronomeIconRight = 'assets/metronome-right.png';
   String metronomeIconLeft = 'assets/metronome-left.png';
@@ -59,6 +61,13 @@ class _MyAppState extends State<MyApp> {
         } else {
           metronomeIcon = metronomeIconRight;
         }
+        setState(() {});
+      },
+    );
+    _metronomePlugin.barStream.listen(
+      (int beats) {
+        currentBarBeats = beats;
+        print("bar: $beats beats");
         setState(() {});
       },
     );
@@ -164,6 +173,25 @@ class _MyAppState extends State<MyApp> {
                   setState(() {});
                 },
               ),
+              Text(
+                'Count-in beats: $countInBeats',
+                style: const TextStyle(fontSize: 20),
+              ),
+              Slider(
+                value: countInBeats.toDouble(),
+                min: 0,
+                max: 8,
+                divisions: 8,
+                onChangeEnd: (val) {},
+                onChanged: (val) {
+                  countInBeats = val.toInt();
+                  setState(() {});
+                },
+              ),
+              Text(
+                'Current bar: $currentBarBeats beats',
+                style: const TextStyle(fontSize: 20),
+              ),
               const Text(
                 'Time Signature:',
                 style: TextStyle(fontSize: 20),
@@ -207,11 +235,15 @@ class _MyAppState extends State<MyApp> {
               isplaying = false;
             } else {
               startTimeUs = await _metronomePlugin.getTimeUs();
-              if (startTimeOffsetMs != 0) {
+              if (startTimeOffsetMs != 0 || countInBeats != 0) {
                 startTimeUs += startTimeOffsetMs * 1000;
+                // The count-in sounds before startTimeUs, so the lead has to
+                // cover it as well as the requested offset.
+                startTimeUs += countInBeats * 60000000 ~/ bpm;
                 _metronomePlugin.play(
                     startTimeUs: startTimeUs,
-                    correctionUs: correctionMs * 1000);
+                    correctionUs: correctionMs * 1000,
+                    countInBeats: countInBeats);
               } else {
                 _metronomePlugin.play();
               }

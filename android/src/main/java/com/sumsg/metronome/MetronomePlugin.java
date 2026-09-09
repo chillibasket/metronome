@@ -21,6 +21,8 @@ public class MetronomePlugin implements FlutterPlugin, MethodCallHandler {
   //
   private EventChannel eventTick;
   private EventChannel.EventSink eventTickSink;
+  private EventChannel eventBar;
+  private EventChannel.EventSink eventBarSink;
   // private final String TAG = "metronome";
   /// Metronome
   private Metronome metronome = null;
@@ -36,11 +38,33 @@ public class MetronomePlugin implements FlutterPlugin, MethodCallHandler {
       @Override
       public void onListen(Object args, EventChannel.EventSink events) {
         eventTickSink = events;
+        // onListen is delivered asynchronously, so init() can reach us first. Wiring
+        // here as well as in metronomeInit() covers either arrival order.
+        if (metronome != null) {
+          metronome.enableTickCallback(events);
+        }
       }
 
       @Override
       public void onCancel(Object args) {
         eventTickSink = null;
+      }
+    });
+    //
+    eventBar = new EventChannel(flutterPluginBinding.getBinaryMessenger(),
+        "metronome_bar");
+    eventBar.setStreamHandler(new EventChannel.StreamHandler() {
+      @Override
+      public void onListen(Object args, EventChannel.EventSink events) {
+        eventBarSink = events;
+        if (metronome != null) {
+          metronome.enableBarCallback(events);
+        }
+      }
+
+      @Override
+      public void onCancel(Object args) {
+        eventBarSink = null;
       }
     });
   }
@@ -54,7 +78,8 @@ public class MetronomePlugin implements FlutterPlugin, MethodCallHandler {
       case "play":
         long startTimeUs = 0;
         long correctionUs = 0;
-        
+        int countInBeats = 0;
+
         if (call.argument("startTimeUs") != null) {
           Number startTimeUsNum = call.argument("startTimeUs");
           startTimeUs = startTimeUsNum != null ? startTimeUsNum.longValue() : 0L;
@@ -63,8 +88,12 @@ public class MetronomePlugin implements FlutterPlugin, MethodCallHandler {
           Number correctionUsNum = call.argument("correctionUs");
           correctionUs = correctionUsNum != null ? correctionUsNum.longValue() : 0L;
         }
-        
-        metronome.play(startTimeUs, correctionUs);
+        if (call.argument("countInBeats") != null) {
+          Number countInBeatsNum = call.argument("countInBeats");
+          countInBeats = countInBeatsNum != null ? Math.max(0, countInBeatsNum.intValue()) : 0;
+        }
+
+        metronome.play(startTimeUs, correctionUs, countInBeats);
         break;
       case "pause":
         metronome.pause();
@@ -90,8 +119,11 @@ public class MetronomePlugin implements FlutterPlugin, MethodCallHandler {
       case "setTimeSignature":
         setTimeSignature(call);
         break;
+      case "setNextBarTimeSignature":
+        setNextBarTimeSignature(call);
+        break;
       case "getTimeSignature":
-        result.success(metronome.audioTimeSignature);
+        result.success(metronome.getTimeSignature());
         break;
       case "setAudioFile":
         setAudioFile(call);
@@ -120,6 +152,7 @@ public class MetronomePlugin implements FlutterPlugin, MethodCallHandler {
   public void onDetachedFromEngine(@NonNull FlutterPluginBinding binding) {
     channel.setMethodCallHandler(null);
     eventTick.setStreamHandler(null);
+    eventBar.setStreamHandler(null);
   }
 
   private void metronomeInit(@NonNull MethodCall call) {
@@ -150,6 +183,9 @@ public class MetronomePlugin implements FlutterPlugin, MethodCallHandler {
     if (enableTickCallback && eventTickSink != null) {
       metronome.enableTickCallback(eventTickSink);
     }
+    if (eventBarSink != null) {
+      metronome.enableBarCallback(eventBarSink);
+    }
   }
 
   private void setVolume(@NonNull MethodCall call) {
@@ -176,6 +212,15 @@ public class MetronomePlugin implements FlutterPlugin, MethodCallHandler {
       Integer _timeSignature = call.argument("timeSignature");
       if (_timeSignature != null) {
         metronome.setTimeSignature(_timeSignature);
+      }
+    }
+  }
+
+  private void setNextBarTimeSignature(@NonNull MethodCall call) {
+    if (metronome != null) {
+      Integer _timeSignature = call.argument("timeSignature");
+      if (_timeSignature != null) {
+        metronome.setNextBarTimeSignature(_timeSignature);
       }
     }
   }

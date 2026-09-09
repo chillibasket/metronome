@@ -46,6 +46,30 @@ metronome.init(
 metronome.play();
 ```
 
+#### Scheduled start, drift correction and count-in (Android only)
+
+`startTimeUs` is the instant **beat 1 of bar 1 sounds**, on the reference clock returned by
+`getTimeUs()`. Two devices given the same `startTimeUs` start together.
+
+```dart
+final now = await metronome.getTimeUs();
+await metronome.play(
+  startTimeUs: now + 3000000, // downbeat in 3 s
+  correctionUs: 0,            // phase offset, 0 = none
+  countInBeats: 4,            // 4 clicks BEFORE the downbeat
+);
+```
+
+The count-in is scheduled *backwards* from `startTimeUs`, so extend your own lead by
+`countInBeats * 60000000 ~/ bpm` microseconds. It needs a scheduled start, is ignored while
+already playing, and is capped at 16. With `countInBeats: 0` (the default) behaviour is
+unchanged.
+
+While playing, `setCorrectionUs()` nudges the phase without restarting, and
+`setNextBarTimeSignature()` changes the meter at the next bar boundary without re-phasing.
+
+On iOS, macOS, Windows and web these arguments are accepted and ignored.
+
 ### Pause
 
 ```dart
@@ -79,6 +103,16 @@ Disable accents when less than 2
 ```dart
 metronome.setTimeSignature(4); 
 metronome.getTimeSignature(); 
+```
+
+For a mid-song meter change, `setNextBarTimeSignature()` takes effect at the next bar
+boundary and leaves the phase alone, so the downbeat accent stays where it belongs
+(Android only). Drive it once per bar from your meter map. `barStream` reports the beat
+count of each bar as it starts, which is how you see a change that landed a bar late:
+
+```dart
+metronome.barStream.listen((int beats) => print("bar of $beats"));
+metronome.setNextBarTimeSignature(2);
 ```
 
 ### isPlaying
@@ -127,5 +161,10 @@ metronome.tickStream.listen((int tick) {
   print("tick: $tick");
 });
 ```
+
+`tick` is the 0-based beat index within the bar. During a count-in requested through `play`
+the values are **negative** and count up to zero — a 4-beat count-in emits `-4, -3, -2, -1`
+and then `0` on the downbeat of bar 1. Negative values cannot appear unless you passed
+`countInBeats > 0`.
 
 
